@@ -66,7 +66,7 @@ pub fn main(init: std.process.Init) !void {
             if (err == error.FileNotFound or err == error.AccessDenied) continue;
             var err_buf: [4096]u8 = undefined;
             var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
-            stderr.interface.print("histguard: cannot open {s}: {t}\n", .{ path, err }) catch {};
+            stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
             stderr.flush() catch {};
             continue;
         };

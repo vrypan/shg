@@ -29,23 +29,23 @@ const scan_flags = [_]zecli.FlagSpec{
 const scan_spec = zecli.CommandSpec{
     .name        = "scan",
     .description = "Scan shell history files for accidentally persisted secrets.",
-    .usage       = "histguard scan [options]",
+    .usage       = "shg scan [options]",
     .flags       = &scan_flags,
 };
 
 const patterns_spec = zecli.CommandSpec{
     .name        = "patterns",
     .description = "List all detection categories with examples.",
-    .usage       = "histguard patterns",
+    .usage       = "shg patterns",
 };
 
 const root_spec = zecli.CommandSpec{
-    .name        = "histguard",
+    .name        = "shg",
     .description = "Scan shell history files for accidentally persisted secrets.",
-    .usage       = "histguard <command> [options]",
+    .usage       = "shg <command> [options]",
     .extra_help  =
         \\
-        \\Run 'histguard <command> --help' for command-specific options.
+        \\Run 'shg <command> --help' for command-specific options.
         \\
     ,
 };

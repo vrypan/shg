@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     mod.addImport("cli", zecli.module("cli"));
 
     const exe = b.addExecutable(.{
-        .name = "histguard",
+        .name = "shg",
         .root_module = mod,
     });
     b.installArtifact(exe);
@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
-    const run_step = b.step("run", "Run histguard");
+    const run_step = b.step("run", "Run shg");
     run_step.dependOn(&run_cmd.step);
 
     const test_mod = b.createModule(.{
@@ -32,7 +32,7 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("cli", zecli.module("cli"));
     const unit_tests = b.addTest(.{
-        .name = "histguard-tests",
+        .name = "shg-tests",
         .root_module = test_mod,
     });
     const test_step = b.step("test", "Run unit tests");

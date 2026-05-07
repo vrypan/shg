@@ -58,5 +58,5 @@ pub fn printSummary(w: *Io.File.Writer, counts: [4]usize) !void {
     try w.interface.print("{d} finding(s) detected ({d} high, {d} medium, {d} low).\n", .{
         total, counts[3], counts[2], counts[1],
     });
-    try w.interface.writeAll("Run `histguard fix` to remove flagged entries.\n");
+    try w.interface.writeAll("Run `shg fix` to remove flagged entries.\n");
 }
