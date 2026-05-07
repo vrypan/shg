@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    if (args.subcommand == .help) return;
+    if (args.subcommand == .help or args.subcommand == .version) return;
     if (args.subcommand == .patterns) {
         try printPatterns(&stdout);
         return;

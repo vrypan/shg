@@ -6,12 +6,16 @@ pub fn build(b: *std.Build) void {
 
     const zecli = b.dependency("zecli", .{});
 
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", "0.1.0");
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     mod.addImport("cli", zecli.module("cli"));
+    mod.addOptions("build_options", options);
 
     const exe = b.addExecutable(.{
         .name = "shg",
@@ -31,6 +35,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_mod.addImport("cli", zecli.module("cli"));
+    test_mod.addOptions("build_options", options);
     const unit_tests = b.addTest(.{
         .name = "shg-tests",
         .root_module = test_mod,
