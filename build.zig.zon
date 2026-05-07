@@ -1,0 +1,6 @@
+.{
+    .name = .histguard,
+    .fingerprint = 0xea15ed3275028adf,
+    .version = "0.1.0",
+    .paths = .{""},
+}

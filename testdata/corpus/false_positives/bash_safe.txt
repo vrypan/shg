@@ -1,0 +1,8 @@
+ls -la
+git status
+echo "hello world"
+grep password /etc/passwd
+export PATH=/usr/local/bin:$PATH
+cat README.md
+docker ps
+kubectl get pods

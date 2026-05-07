@@ -1,0 +1,5 @@
+: 1715000000:0;export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz012345678901234567
+: 1715000001:0;curl -H "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345"
+: 1715000002:0;psql postgres://admin:s3cr3tpass@db.internal/prod
+: 1715000003:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+: 1715000004:0;mysql --password s3cr3tDatabasePass99
