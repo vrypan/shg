@@ -26,19 +26,25 @@ const Severity = finding_mod.Severity;
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
-
     const arena_alloc = init.arena.allocator();
-    const raw_args = try init.minimal.args.toSlice(arena_alloc);
-    const args = try cli.parse(raw_args, arena_alloc);
 
     var out_buf: [32768]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(io, &out_buf);
     defer stdout.flush() catch {};
 
-    switch (args.subcommand) {
-        .help => { try printHelp(&stdout); return; },
-        .patterns => { try printPatterns(&stdout); return; },
-        .scan => {},
+    const raw_args = try init.minimal.args.toSlice(arena_alloc);
+    const args = cli.parse(raw_args, &stdout.interface, arena_alloc) catch |err| {
+        if (err == error.ReportedCliError) {
+            stdout.flush() catch {};
+            std.process.exit(2);
+        }
+        return err;
+    };
+
+    if (args.subcommand == .help) return;
+    if (args.subcommand == .patterns) {
+        try printPatterns(&stdout);
+        return;
     }
 
     const report_opts = report.Options{
@@ -144,30 +150,6 @@ fn getRecommendation(det_type: []const u8) []const u8 {
         std.mem.eql(u8, det_type, "ssh_key")) return "Private key must not appear in shell history";
     if (std.mem.eql(u8, det_type, "credential_url")) return "Avoid embedding credentials in URLs";
     return "Remove this history entry and rotate the credential";
-}
-
-fn printHelp(w: *Io.File.Writer) !void {
-    try w.interface.writeAll(
-        \\histguard - scan shell history for secrets
-        \\
-        \\USAGE:
-        \\  histguard [scan] [flags]    scan history files (default)
-        \\  histguard patterns          list all detection patterns
-        \\  histguard help              show this help
-        \\
-        \\FLAGS:
-        \\  --path <file>               scan a specific file (repeatable)
-        \\  --json                      output NDJSON instead of human text
-        \\  --min-severity <level>      low|medium|high (default: low)
-        \\  --entropy-threshold <n>     Shannon entropy cutoff (default: 3.5)
-        \\  --show-full                 disable redaction (show full tokens)
-        \\
-        \\EXIT CODES:
-        \\  0  no findings
-        \\  1  one or more findings detected
-        \\  2  error
-        \\
-    );
 }
 
 fn printPatterns(w: *Io.File.Writer) !void {

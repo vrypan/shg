@@ -1,64 +1,147 @@
 const std = @import("std");
+const zecli = @import("cli");
 const Severity = @import("finding.zig").Severity;
 
 pub const Subcommand = enum { scan, patterns, help };
 
 pub const Args = struct {
-    subcommand: Subcommand = .scan,
-    paths: []const []const u8 = &.{},
-    json: bool = false,
-    min_severity: Severity = .low,
-    entropy_threshold: f64 = 3.5,
-    show_full: bool = false,
+    subcommand: Subcommand,
+    paths: []const []const u8,
+    json: bool,
+    min_severity: Severity,
+    entropy_threshold: f64,
+    show_full: bool,
 };
 
-/// raw[0] is the binary name and is skipped.
-pub fn parse(raw: []const [:0]const u8, alloc: std.mem.Allocator) !Args {
-    var result = Args{};
-    var paths: std.ArrayList([]const u8) = .empty;
-    var subcommand_set = false;
-    var i: usize = 1;
+const commands = [_]zecli.CommandEntry{
+    .{ .name = "scan",     .description = "Scan history files for secrets (default)" },
+    .{ .name = "patterns", .description = "List all detection patterns and examples" },
+};
 
-    while (i < raw.len) : (i += 1) {
-        const arg = raw[i];
+const scan_flags = [_]zecli.FlagSpec{
+    .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",       .repeatable = true },
+    .{ .name = "json",               .short = 'j',                                          .description = "Output NDJSON"                                     },
+    .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",             .default_value = "low" },
+    .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff",      .default_value = "3.5" },
+    .{ .name = "show-full",                                                                  .description = "Disable redaction"                                  },
+};
 
-        if (!subcommand_set and !std.mem.startsWith(u8, arg, "-")) {
-            if (std.mem.eql(u8, arg, "scan")) {
-                result.subcommand = .scan;
-            } else if (std.mem.eql(u8, arg, "patterns")) {
-                result.subcommand = .patterns;
-            } else if (std.mem.eql(u8, arg, "help")) {
-                result.subcommand = .help;
-            }
-            subcommand_set = true;
-            continue;
+const scan_spec = zecli.CommandSpec{
+    .name        = "scan",
+    .description = "Scan shell history files for accidentally persisted secrets.",
+    .usage       = "histguard scan [options]",
+    .flags       = &scan_flags,
+};
+
+const patterns_spec = zecli.CommandSpec{
+    .name        = "patterns",
+    .description = "List all detection categories with examples.",
+    .usage       = "histguard patterns",
+};
+
+const root_spec = zecli.CommandSpec{
+    .name        = "histguard",
+    .description = "Scan shell history files for accidentally persisted secrets.",
+    .usage       = "histguard <command> [options]",
+    .extra_help  =
+        \\
+        \\Run 'histguard <command> --help' for command-specific options.
+        \\
+    ,
+};
+
+/// Parse raw process args (raw[0] is the binary name).
+/// `writer` receives error and help output; must support .print() and .writeAll().
+pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocator) !Args {
+    // Determine subcommand from raw[1], defaulting to scan.
+    var subcmd: Subcommand = .scan;
+    var subcmd_args: []const [:0]const u8 = if (raw.len > 1) raw[1..] else &.{};
+
+    if (raw.len > 1) {
+        const first = raw[1];
+        if (std.mem.eql(u8, first, "scan")) {
+            subcmd = .scan;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "patterns")) {
+            subcmd = .patterns;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "help") or
+                   std.mem.eql(u8, first, "--help") or
+                   std.mem.eql(u8, first, "-h"))
+        {
+            subcmd = .help;
+            subcmd_args = &.{};
         }
-
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            result.subcommand = .help;
-        } else if (std.mem.eql(u8, arg, "--json")) {
-            result.json = true;
-        } else if (std.mem.eql(u8, arg, "--show-full")) {
-            result.show_full = true;
-        } else if (std.mem.eql(u8, arg, "--path")) {
-            i += 1;
-            if (i >= raw.len) return error.MissingArgument;
-            try paths.append(alloc, try alloc.dupe(u8, raw[i]));
-        } else if (std.mem.startsWith(u8, arg, "--path=")) {
-            try paths.append(alloc, try alloc.dupe(u8, arg[7..]));
-        } else if (std.mem.eql(u8, arg, "--min-severity")) {
-            i += 1;
-            if (i >= raw.len) return error.MissingArgument;
-            result.min_severity = parseSeverity(raw[i]) orelse return error.InvalidSeverity;
-        } else if (std.mem.eql(u8, arg, "--entropy-threshold")) {
-            i += 1;
-            if (i >= raw.len) return error.MissingArgument;
-            result.entropy_threshold = std.fmt.parseFloat(f64, raw[i]) catch return error.InvalidFloat;
-        }
+        // else: flags with no subcommand → scan
     }
 
-    result.paths = try paths.toOwnedSlice(alloc);
-    return result;
+    switch (subcmd) {
+        .help => {
+            try zecli.printCommandHelp(alloc, writer, root_spec);
+            try zecli.printCommandList(writer, &commands);
+            return Args{
+                .subcommand = .help,
+                .paths = &.{},
+                .json = false,
+                .min_severity = .low,
+                .entropy_threshold = 3.5,
+                .show_full = false,
+            };
+        },
+        .patterns => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, patterns_spec);
+            }
+            return Args{
+                .subcommand = .patterns,
+                .paths = &.{},
+                .json = false,
+                .min_severity = .low,
+                .entropy_threshold = 3.5,
+                .show_full = false,
+            };
+        },
+        .scan => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, scan_spec);
+                return Args{ .subcommand = .help, .paths = &.{}, .json = false, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            }
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, scan_spec);
+
+            // Collect all --path values (repeatable flag).
+            var paths: std.ArrayList([]const u8) = .empty;
+            for (parsed.flags.items) |flag| {
+                if (std.mem.eql(u8, flag.name, "path")) {
+                    if (flag.value) |v| try paths.append(alloc, v);
+                }
+            }
+
+            const sev_str = parsed.last("min-severity") orelse "low";
+            const min_sev = parseSeverity(sev_str) orelse {
+                try writer.print("error: invalid --min-severity value '{s}' (use low, medium, or high)\n", .{sev_str});
+                return error.ReportedCliError;
+            };
+
+            const thr_str = parsed.last("entropy-threshold") orelse "3.5";
+            const entropy_threshold = std.fmt.parseFloat(f64, thr_str) catch {
+                try writer.print("error: invalid --entropy-threshold value '{s}'\n", .{thr_str});
+                return error.ReportedCliError;
+            };
+
+            return Args{
+                .subcommand = .scan,
+                .paths = try paths.toOwnedSlice(alloc),
+                .json = parsed.present("json"),
+                .min_severity = min_sev,
+                .entropy_threshold = entropy_threshold,
+                .show_full = parsed.present("show-full"),
+            };
+        },
+    }
+}
+
+pub fn printScanHelp(alloc: std.mem.Allocator, writer: anytype) !void {
+    try zecli.printCommandHelp(alloc, writer, scan_spec);
 }
 
 fn parseSeverity(s: []const u8) ?Severity {

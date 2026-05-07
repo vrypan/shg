@@ -4,11 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zecli = b.dependency("zecli", .{});
+
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    mod.addImport("cli", zecli.module("cli"));
 
     const exe = b.addExecutable(.{
         .name = "histguard",
@@ -27,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    test_mod.addImport("cli", zecli.module("cli"));
     const unit_tests = b.addTest(.{
         .name = "histguard-tests",
         .root_module = test_mod,

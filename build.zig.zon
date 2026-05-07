@@ -2,5 +2,11 @@
     .name = .histguard,
     .fingerprint = 0xea15ed3275028adf,
     .version = "0.1.0",
+    .dependencies = .{
+        .zecli = .{
+            .url = "git+https://github.com/vrypan/zecli.git#97166c6df7e9d7423fcf6072b57313f42d5a3db7",
+            .hash = "zecli-0.1.1-j151kxuEAAAi-URuk3YOrrJgD4spLoAvyj9fHbDR1sEo",
+        },
+    },
     .paths = .{""},
 }
