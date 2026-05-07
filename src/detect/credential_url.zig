@@ -22,6 +22,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                         .token = pass,
                         .det_type = "credential_url",
                         .signals = .{
+                            .has_sensitive_keyword = true,
                             .is_credential_url = true,
                             .token_len = pass.len,
                             .entropy = entropy.shannon(pass),

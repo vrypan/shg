@@ -20,14 +20,13 @@ $ shg scan
   action:  Rotate at github.com/settings/tokens
 
 2 finding(s) detected (2 high, 0 medium, 0 low).
-Run `shg fix` to remove flagged entries.
+Remove flagged history entries and rotate affected credentials.
 ```
 
 ## Features
 
 - Detects secrets across five categories (see [Detection](#detection))
 - Redacts secrets in output — safe to share or log
-- JSON (NDJSON) output for scripting and pipelines
 - Auto-discovers bash, zsh, fish, and common REPL histories
 - Offline and local — no network access, no telemetry
 - Single static binary, ~220 KB
@@ -60,7 +59,6 @@ shg scan [options]
 
 Options:
   -p, --path <FILE>            History file to scan [repeatable]
-  -j, --json                   Output NDJSON
       --min-severity <LEVEL>   low|medium|high [default: low]
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
       --show-full              Disable redaction
@@ -84,9 +82,6 @@ shg scan --path ~/.zsh_history --path ~/.bash_history
 
 # Only report high-severity findings
 shg scan --min-severity high
-
-# JSON output for jq
-shg scan --json | jq 'select(.severity == "high")'
 ```
 
 **Exit codes:**
@@ -187,6 +182,7 @@ The entropy threshold is configurable with `--entropy-threshold`.
 - **Read-only.** The current release only scans; it does not modify history
   files. A `fix` subcommand (with atomic writes and automatic backups) is
   planned for a future release.
+- JSON output is intentionally deferred until a later release.
 
 ## License
 

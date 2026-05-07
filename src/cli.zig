@@ -10,7 +10,6 @@ pub const Subcommand = enum { scan, patterns, help, version };
 pub const Args = struct {
     subcommand: Subcommand,
     paths: []const []const u8,
-    json: bool,
     min_severity: Severity,
     entropy_threshold: f64,
     show_full: bool,
@@ -24,7 +23,6 @@ const commands = [_]zecli.CommandEntry{
 
 const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",  .repeatable = true },
-    .{ .name = "json",               .short = 'j',                                          .description = "Output NDJSON"                              },
     .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "low" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
     .{ .name = "show-full",                                                                  .description = "Disable redaction"                          },
@@ -84,23 +82,25 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
     switch (subcmd) {
         .version => {
             try writer.print("{s}\n", .{build_options.version});
-            return Args{ .subcommand = .version, .paths = &.{}, .json = false, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return Args{ .subcommand = .version, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
         },
         .help => {
             try zecli.printCommandHelp(alloc, writer, root_spec);
             try zecli.printCommandList(writer, &commands);
-            return Args{ .subcommand = .help, .paths = &.{}, .json = false, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return Args{ .subcommand = .help, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
         },
         .patterns => {
             if (zecli.helpRequested(subcmd_args)) {
                 try zecli.printCommandHelp(alloc, writer, patterns_spec);
+            } else {
+                _ = try zecli.parseCommand(alloc, writer, subcmd_args, patterns_spec);
             }
-            return Args{ .subcommand = .patterns, .paths = &.{}, .json = false, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return Args{ .subcommand = .patterns, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
         },
         .scan => {
             if (zecli.helpRequested(subcmd_args)) {
                 try zecli.printCommandHelp(alloc, writer, scan_spec);
-                return Args{ .subcommand = .help, .paths = &.{}, .json = false, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+                return Args{ .subcommand = .help, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
             }
             const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, scan_spec);
 
@@ -126,7 +126,6 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             return Args{
                 .subcommand = .scan,
                 .paths = try paths.toOwnedSlice(alloc),
-                .json = parsed.present("json"),
                 .min_severity = min_sev,
                 .entropy_threshold = entropy_threshold,
                 .show_full = parsed.present("show-full"),

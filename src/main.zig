@@ -8,7 +8,6 @@ const scorer = @import("scorer.zig");
 const redact = @import("redact.zig");
 const report = @import("report.zig");
 
-const bash_parser = @import("parsers/bash.zig");
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
 
@@ -48,7 +47,6 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const report_opts = report.Options{
-        .json = args.json,
         .min_severity = args.min_severity,
         .show_full = args.show_full,
     };
@@ -92,22 +90,23 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (!args.json) try report.printSummary(&stdout, counts);
+    try report.printSummary(&stdout, counts);
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);
 }
 
 fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
-    if (std.mem.indexOf(u8, path, "zsh_history") != null)
-        return zsh_parser.parse(reader, path, alloc);
     if (std.mem.indexOf(u8, path, "fish_history") != null)
         return fish_parser.parse(reader, path, alloc);
-    return bash_parser.parse(reader, path, alloc);
+    // The zsh parser also accepts plain one-command-per-line histories. Using it
+    // as the default preserves zsh extended metadata for explicit --path scans.
+    return zsh_parser.parse(reader, path, alloc);
 }
 
 fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
+    var seen_tokens: std.ArrayList([]const u8) = .empty;
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
     const detectors = [_]DetectFn{
@@ -121,6 +120,16 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Fi
     for (detectors) |det| {
         const candidates = try det(e, alloc);
         for (candidates) |c| {
+            var seen = false;
+            for (seen_tokens.items) |token| {
+                if (std.mem.eql(u8, token, c.token)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) continue;
+            try seen_tokens.append(alloc, c.token);
+
             const s = scorer.score(c.signals, entropy_threshold);
             const sev = scorer.severity(s);
             const redacted = try redact.redactCommand(e.command, c.token, alloc);
