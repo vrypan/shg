@@ -63,3 +63,18 @@ test "detect credential url" {
     try std.testing.expect(cs.len == 1);
     try std.testing.expectEqualStrings("s3cr3tpass", cs[0].token);
 }
+
+test "credential url scores above ignore" {
+    const scorer = @import("../scorer.zig");
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "psql postgres://admin:s3cr3tpass@db.internal/prod",
+        .command = "psql postgres://admin:s3cr3tpass@db.internal/prod",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    const score = scorer.score(cs[0].signals, scorer.default_entropy_threshold);
+    try std.testing.expect(scorer.severity(score) != .ignore);
+}

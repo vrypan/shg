@@ -113,12 +113,17 @@ $ shg patterns
   openai_api_key    sk-... (OpenAI)
   anthropic_api_key sk-ant-... (Anthropic)
   github_token      ghp_... (GitHub)
+  github_oauth      gho_... (GitHub OAuth)
+  github_pat        github_pat_... (GitHub fine-grained PAT)
   github_app_token  ghs_... (GitHub App)
   slack_bot_token   xoxb-... (Slack)
   slack_user_token  xoxp-... (Slack)
-  aws_access_key    AKIA... (AWS)
+  slack_app_token   xapp-... (Slack)
+  aws_access_key    AKIA... / ASIA... (AWS)
   stripe_key        sk_live_... (Stripe)
+  stripe_webhook    whsec_... (Stripe)
   private_key       -----BEGIN * KEY----- markers
+  age_secret_key    AGE-SECRET-KEY-1... markers
   ssh_key           ssh-rsa AAAA... public keys
 ```
 

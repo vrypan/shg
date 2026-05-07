@@ -4,8 +4,10 @@ const Candidate = @import("../finding.zig").Candidate;
 const entropy = @import("../entropy.zig");
 
 const sensitive_keywords = [_][]const u8{
-    "password", "passwd", "secret", "token", "api_key", "apikey",
-    "access_key", "private_key", "session", "credential", "passphrase",
+    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey",
+    "access_key", "private_key", "session", "session_token", "credential", "passphrase",
+    "auth", "authorization", "bearer", "cookie", "client_secret",
+    "refresh_token", "id_token", "webhook_secret",
 };
 
 const placeholder_values = [_][]const u8{
@@ -98,4 +100,13 @@ test "inline assign ignores placeholder" {
     defer alloc.free(cs);
     try std.testing.expect(cs.len == 1);
     try std.testing.expect(cs[0].signals.is_placeholder);
+}
+
+test "inline assign detects expanded sensitive keywords" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export CLIENT_SECRET=s3cr3tV4lue99X", .command = "export CLIENT_SECRET=s3cr3tV4lue99X" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    try std.testing.expect(cs[0].signals.has_sensitive_keyword);
 }

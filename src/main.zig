@@ -107,6 +107,7 @@ fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]
 fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
+    defer seen_tokens.deinit(alloc);
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
     const detectors = [_]DetectFn{
@@ -119,6 +120,7 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Fi
 
     for (detectors) |det| {
         const candidates = try det(e, alloc);
+        defer alloc.free(candidates);
         for (candidates) |c| {
             var seen = false;
             for (seen_tokens.items) |token| {
@@ -150,11 +152,11 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Fi
 fn getRecommendation(det_type: []const u8) []const u8 {
     if (std.mem.eql(u8, det_type, "openai_api_key")) return "Rotate at platform.openai.com/api-keys";
     if (std.mem.eql(u8, det_type, "anthropic_api_key")) return "Rotate at console.anthropic.com";
-    if (std.mem.eql(u8, det_type, "github_token") or
-        std.mem.eql(u8, det_type, "github_app_token")) return "Rotate at github.com/settings/tokens";
-    if (std.mem.eql(u8, det_type, "aws_access_key")) return "Rotate via AWS IAM console";
-    if (std.mem.eql(u8, det_type, "stripe_key") or
-        std.mem.eql(u8, det_type, "stripe_test_key")) return "Rotate at dashboard.stripe.com/apikeys";
+    if (std.mem.startsWith(u8, det_type, "github_")) return "Rotate at github.com/settings/tokens";
+    if (std.mem.eql(u8, det_type, "aws_access_key") or
+        std.mem.eql(u8, det_type, "aws_temp_access_key")) return "Rotate via AWS IAM console";
+    if (std.mem.startsWith(u8, det_type, "stripe_")) return "Rotate at dashboard.stripe.com/apikeys";
+    if (std.mem.startsWith(u8, det_type, "slack_")) return "Rotate in Slack app configuration";
     if (std.mem.eql(u8, det_type, "private_key") or
         std.mem.eql(u8, det_type, "ssh_key")) return "Private key must not appear in shell history";
     if (std.mem.eql(u8, det_type, "credential_url")) return "Avoid embedding credentials in URLs";
@@ -171,12 +173,17 @@ fn printPatterns(w: *Io.File.Writer) !void {
         \\  openai_api_key    sk-... (OpenAI)
         \\  anthropic_api_key sk-ant-... (Anthropic)
         \\  github_token      ghp_... (GitHub)
+        \\  github_oauth      gho_... (GitHub OAuth)
+        \\  github_pat        github_pat_... (GitHub fine-grained PAT)
         \\  github_app_token  ghs_... (GitHub App)
         \\  slack_bot_token   xoxb-... (Slack)
         \\  slack_user_token  xoxp-... (Slack)
-        \\  aws_access_key    AKIA... (AWS)
+        \\  slack_app_token   xapp-... (Slack)
+        \\  aws_access_key    AKIA... / ASIA... (AWS)
         \\  stripe_key        sk_live_... (Stripe)
+        \\  stripe_webhook    whsec_... (Stripe)
         \\  private_key       -----BEGIN * KEY----- markers
+        \\  age_secret_key    AGE-SECRET-KEY-1... markers
         \\  ssh_key           ssh-rsa AAAA... public keys
         \\
     );
@@ -191,7 +198,113 @@ test {
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
     _ = @import("detect/known_tokens.zig");
+    _ = @import("detect/private_keys.zig");
     _ = @import("detect/inline_assign.zig");
     _ = @import("detect/auth_header.zig");
     _ = @import("detect/credential_url.zig");
+}
+
+test "explicit zsh-format fixture path preserves extended commands" {
+    const alloc = std.testing.allocator;
+    var reader = Io.Reader.fixed(": 1715000000:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n");
+    const entries = try parseFile(&reader, "zsh_sample.txt", alloc);
+    defer {
+        for (entries) |e| {
+            alloc.free(e.command);
+            alloc.free(e.raw);
+        }
+        alloc.free(entries);
+    }
+    try std.testing.expectEqual(@as(usize, 1), entries.len);
+    try std.testing.expectEqualStrings("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", entries[0].command);
+
+    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expect(findings[0].severity != .ignore);
+}
+
+test "duplicate token candidates collapse to one finding" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
+        .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
+    };
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqualStrings("github_token", findings[0].det_type);
+}
+
+test "corpus true positives produce one visible finding per line" {
+    const alloc = std.testing.allocator;
+    const input =
+        ": 1715000000:0;export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz012345678901234567\n" ++
+        ": 1715000001:0;curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"\n" ++
+        ": 1715000002:0;psql postgres://admin:s3cr3tpass@db.internal/prod\n" ++
+        ": 1715000003:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" ++
+        ": 1715000004:0;mysql --password s3cr3tDatabasePass99\n";
+    var reader = Io.Reader.fixed(input);
+    const entries = try parseFile(&reader, "zsh_sample.txt", alloc);
+    defer {
+        for (entries) |e| {
+            alloc.free(e.command);
+            alloc.free(e.raw);
+        }
+        alloc.free(entries);
+    }
+    try std.testing.expectEqual(@as(usize, 5), entries.len);
+
+    var visible: usize = 0;
+    for (entries) |e| {
+        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+        defer {
+            for (findings) |f| alloc.free(f.redacted_cmd);
+            alloc.free(findings);
+        }
+        for (findings) |f| {
+            if (f.severity != .ignore) visible += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 5), visible);
+}
+
+test "corpus false positives produce no visible findings" {
+    const alloc = std.testing.allocator;
+    const input =
+        "ls -la\n" ++
+        "git status\n" ++
+        "echo \"hello world\"\n" ++
+        "grep password /etc/passwd\n" ++
+        "export PATH=/usr/local/bin:$PATH\n" ++
+        "cat README.md\n" ++
+        "docker ps\n" ++
+        "kubectl get pods\n";
+    var reader = Io.Reader.fixed(input);
+    const entries = try parseFile(&reader, "bash_safe.txt", alloc);
+    defer {
+        for (entries) |e| {
+            alloc.free(e.command);
+            alloc.free(e.raw);
+        }
+        alloc.free(entries);
+    }
+
+    for (entries) |e| {
+        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+        defer {
+            for (findings) |f| alloc.free(f.redacted_cmd);
+            alloc.free(findings);
+        }
+        for (findings) |f| {
+            try std.testing.expect(f.severity == .ignore);
+        }
+    }
 }

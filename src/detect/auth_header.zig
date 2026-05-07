@@ -14,11 +14,15 @@ const auth_prefixes = [_][]const u8{
 
 const secret_flags = [_][]const u8{
     "--password ", "--token ", "--secret ", "--api-key ",
-    "--access-key ", "--auth ",
+    "--access-key ",
 };
 
 const short_secret_flags = [_][]const u8{
     "-p",
+};
+
+const userinfo_flags = [_][]const u8{
+    "-u ", "--user ", "--auth ",
 };
 
 pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
@@ -38,6 +42,29 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                 try results.append(alloc, .{
                     .token = token,
                     .det_type = "auth_header",
+                    .signals = .{
+                        .is_auth_header = true,
+                        .has_sensitive_keyword = true,
+                        .token_len = token.len,
+                        .entropy = entropy.shannon(token),
+                    },
+                });
+            }
+        }
+    }
+
+    for (userinfo_flags) |flag| {
+        if (std.mem.indexOf(u8, cmd, flag)) |idx| {
+            const val_start = idx + flag.len;
+            var val_end = val_start;
+            while (val_end < cmd.len) : (val_end += 1) {
+                const c = cmd[val_end];
+                if (c == ' ' or c == '"' or c == '\'') break;
+            }
+            if (extractUserinfoPassword(cmd[val_start..val_end])) |token| {
+                try results.append(alloc, .{
+                    .token = token,
+                    .det_type = "auth_userinfo",
                     .signals = .{
                         .is_auth_header = true,
                         .has_sensitive_keyword = true,
@@ -102,6 +129,13 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
     return results.toOwnedSlice(alloc);
 }
 
+fn extractUserinfoPassword(s: []const u8) ?[]const u8 {
+    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return null;
+    const pass = s[colon + 1 ..];
+    if (pass.len == 0) return null;
+    return pass;
+}
+
 test "detect bearer token" {
     const alloc = std.testing.allocator;
     const e = Entry{
@@ -121,6 +155,45 @@ test "detect mysql short password flag" {
         .file = "test", .line = 1, .timestamp = null,
         .raw = "mysql -ps3cr3tDatabasePass99",
         .command = "mysql -ps3cr3tDatabasePass99",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    try std.testing.expectEqualStrings("s3cr3tDatabasePass99", cs[0].token);
+}
+
+test "long password flag is not also treated as short flag" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "mysql --password s3cr3tDatabasePass99",
+        .command = "mysql --password s3cr3tDatabasePass99",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    try std.testing.expectEqualStrings("s3cr3tDatabasePass99", cs[0].token);
+}
+
+test "detect curl userinfo password" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl -u admin:s3cr3tDatabasePass99 https://example.com",
+        .command = "curl -u admin:s3cr3tDatabasePass99 https://example.com",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    try std.testing.expectEqualStrings("s3cr3tDatabasePass99", cs[0].token);
+}
+
+test "detect httpie auth password" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "http --auth admin:s3cr3tDatabasePass99 example.com",
+        .command = "http --auth admin:s3cr3tDatabasePass99 example.com",
     };
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
