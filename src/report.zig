@@ -21,7 +21,7 @@ pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
 
 fn printFindingOneLine(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     const cmd = if (opts.redacted) f.redacted_cmd else f.entry.command;
-    const source = if (std.mem.eql(u8, f.entry.file, "<env>")) "ENV " else "HIST";
+    const source = if (std.mem.eql(u8, f.entry.file, "<env>")) "ENV   " else if (std.mem.eql(u8, f.entry.file, "<stdin>")) "STDIN" else "HIST  ";
     if (opts.color) {
         try w.interface.print("{s}{s}{s} {s} {s}{s}{s}\n", .{
             severityStyle(f.severity), severityBadge(f.severity), ansi_reset,

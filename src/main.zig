@@ -70,10 +70,9 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
+    const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
+
     if (args.scan_hist) {
-        const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
-
-
         if (stdin_is_piped) {
             var arena = std.heap.ArenaAllocator.init(gpa);
             defer arena.deinit();
@@ -112,7 +111,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (args.scan_env) {
+    // When piped, skip env unless --env was explicitly passed.
+    const do_scan_env = args.scan_env and (!stdin_is_piped or args.env_explicit);
+    if (do_scan_env) {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const a = arena.allocator();
