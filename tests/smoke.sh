@@ -82,6 +82,19 @@ test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "zsh may keep recent history in memory"
 say "PASS zsh history flush warning"
 
+say "TEST piped history"
+run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false' sh "$xdg" "$shg"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q '<stdin>'
+printf '%s\n' "$output" | grep -q 'type:    config_check'
+say "PASS piped history"
+
+say "TEST explicit path ignores piped history"
+run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false --path "$3"' sh "$xdg" "$shg" "$fp"
+test "$status" -eq 0
+printf '%s\n' "$output" | grep -q 'No findings detected.'
+say "PASS explicit path ignores piped history"
+
 say "TEST scan true-positive corpus"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp" --min-severity low
 test "$status" -eq 1

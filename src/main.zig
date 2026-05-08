@@ -66,35 +66,48 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (args.scan_hist) {
-        if (args.paths.len == 0 and isZshSession(init.environ_map)) {
+        const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
+
+        if (args.paths.len == 0 and !stdin_is_piped and isZshSession(init.environ_map)) {
             try stderr.interface.writeAll("shg: zsh may keep recent history in memory; run 'fc -W' before scanning. If HISTFILE is custom, pass --path \"$HISTFILE\"\n");
             try stderr.flush();
         }
 
-        const paths: []const []const u8 = if (args.paths.len > 0)
-            args.paths
-        else
-            try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
-
-        for (paths) |path| {
-            const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
-                if (err == error.FileNotFound or err == error.AccessDenied) continue;
-                var file_err_buf: [4096]u8 = undefined;
-                var file_stderr = Io.File.stderr().writerStreaming(io, &file_err_buf);
-                file_stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
-                file_stderr.flush() catch {};
-                continue;
-            };
-            defer file.close(io);
-
+        if (stdin_is_piped) {
             var arena = std.heap.ArenaAllocator.init(gpa);
             defer arena.deinit();
             const a = arena.allocator();
 
             var read_buf: [65536]u8 = undefined;
-            var reader = file.reader(io, &read_buf);
-            const entries = try parseFile(&reader.interface, path, a);
+            var reader = Io.File.stdin().readerStreaming(io, &read_buf);
+            const entries = try parseFile(&reader.interface, "<stdin>", a);
             try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
+        } else {
+            const paths: []const []const u8 = if (args.paths.len > 0)
+                args.paths
+            else
+                try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
+
+            for (paths) |path| {
+                const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
+                    if (err == error.FileNotFound or err == error.AccessDenied) continue;
+                    var file_err_buf: [4096]u8 = undefined;
+                    var file_stderr = Io.File.stderr().writerStreaming(io, &file_err_buf);
+                    file_stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
+                    file_stderr.flush() catch {};
+                    continue;
+                };
+                defer file.close(io);
+
+                var arena = std.heap.ArenaAllocator.init(gpa);
+                defer arena.deinit();
+                const a = arena.allocator();
+
+                var read_buf: [65536]u8 = undefined;
+                var reader = file.reader(io, &read_buf);
+                const entries = try parseFile(&reader.interface, path, a);
+                try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
+            }
         }
     }
 
@@ -121,6 +134,13 @@ fn isZshSession(environ: *const std.process.Environ.Map) bool {
         if (std.mem.eql(u8, base, "zsh") or std.mem.eql(u8, base, "-zsh")) return true;
     }
     return false;
+}
+
+fn stdinHasHistory(io: Io) !bool {
+    const stdin = Io.File.stdin();
+    if (try stdin.isTty(io)) return false;
+    const stat = try stdin.stat(io);
+    return stat.kind == .file or stat.kind == .named_pipe;
 }
 
 fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?rules.Cache {

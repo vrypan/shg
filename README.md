@@ -87,23 +87,20 @@ shg scan --env false --path ~/.bash_history
 # Scan multiple files
 shg scan --path ~/.zsh_history --path ~/.bash_history
 
+# Scan history from stdin
+cat ~/.zsh_history | shg scan --env false
+
 # Include low and medium findings
 shg scan --min-severity low
 ```
 
 Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
-Also, zsh's `$HISTFILE` is often not exported to child processes, so pass it
-explicitly if you use a custom history path. Use a shell helper if you want
-scans to include the latest interactive command:
+Use a shell helper if you want scans to include the latest interactive history
+without forcing zsh to write the history file:
 
 ```sh
 shg-scan() {
-  fc -W 2>/dev/null
-  if [ -n "$HISTFILE" ]; then
-    shg scan --path "$HISTFILE" "$@"
-  else
-    shg scan "$@"
-  fi
+  fc -l -n 1 | shg scan "$@"
 }
 ```
 
