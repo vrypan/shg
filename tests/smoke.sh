@@ -52,4 +52,18 @@ if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; the
 fi
 say "PASS scan environment variables"
 
+say "TEST skip known non-secret environment variables"
+run_capture env -i \
+    SSH_AUTH_SOCK=/tmp/ssh-agent/socket \
+    STARSHIP_SESSION_KEY=abcdefghijklmnopqrstuvwxyz0123456789 \
+    GPG_AGENT_INFO=/tmp/gpg-agent:1234:1 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-session \
+    PWD=/Users/example/project \
+    OLDPWD=/Users/example \
+    OLD_PWD=/Users/example/old \
+    "$shg" scan --hist false
+test "$status" -eq 0
+printf '%s\n' "$output" | grep -q 'No findings detected.'
+say "PASS skip known non-secret environment variables"
+
 say "SMOKE PASS"

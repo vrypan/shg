@@ -110,6 +110,7 @@ fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) !
     const values = environ.values();
     for (keys, values, 0..) |key, value, i| {
         if (key.len == 0 or value.len == 0) continue;
+        if (isAllowedEnvKey(key)) continue;
         const cmd = try std.mem.concat(alloc, u8, &.{ key, "=", value });
         try entries.append(alloc, .{
             .file = "<env>",
@@ -120,6 +121,22 @@ fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) !
         });
     }
     return entries.toOwnedSlice(alloc);
+}
+
+fn isAllowedEnvKey(key: []const u8) bool {
+    const allowlist = [_][]const u8{
+        "SSH_AUTH_SOCK",
+        "STARSHIP_SESSION_KEY",
+        "GPG_AGENT_INFO",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PWD",
+        "OLDPWD",
+        "OLD_PWD",
+    };
+    for (allowlist) |allowed| {
+        if (std.ascii.eqlIgnoreCase(key, allowed)) return true;
+    }
+    return false;
 }
 
 fn scanEntries(
@@ -306,6 +323,29 @@ test "environment entries are converted to assignments" {
     }
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqualStrings("github_token", findings[0].det_type);
+}
+
+test "allowed environment keys are skipped" {
+    const alloc = std.testing.allocator;
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+    try env.put("SSH_AUTH_SOCK", "/tmp/ssh-agent/socket");
+    try env.put("STARSHIP_SESSION_KEY", "abcdefghijklmnopqrstuvwxyz0123456789");
+    try env.put("GPG_AGENT_INFO", "/tmp/gpg-agent:1234:1");
+    try env.put("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/dbus-session");
+    try env.put("PWD", "/Users/example/project");
+    try env.put("OLDPWD", "/Users/example");
+    try env.put("OLD_PWD", "/Users/example/old");
+    try env.put("GITHUB_PUBLIC_REPOS_TOKEN", "ghp_abcdefghijklmnopqrstuvwxyz012345");
+
+    const entries = try parseEnv(&env, alloc);
+    defer {
+        for (entries) |e| alloc.free(e.command);
+        alloc.free(entries);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), entries.len);
+    try std.testing.expectEqualStrings("GITHUB_PUBLIC_REPOS_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
 }
 
 test "corpus true positives produce one visible finding per line" {
