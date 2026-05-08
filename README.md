@@ -33,6 +33,23 @@ Remove flagged history entries and rotate affected credentials.
 
 ## Installation
 
+**Homebrew:**
+
+```sh
+brew install vrypan/tap/shg
+```
+
+**Pre-built binaries:**
+
+Download the latest release for your platform from the
+[Releases page](https://github.com/vrypan/shg/releases), extract, and place
+both `shg` and `shg-config` somewhere on your `$PATH`.
+
+```sh
+tar xzf shg-v*.tar.gz
+sudo mv shg shg-config /usr/local/bin/
+```
+
 **Build from source** (requires Zig 0.16):
 
 ```sh
@@ -66,6 +83,8 @@ Options:
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
       --redacted[=BOOL]        Redact secrets in output [default: true]
       --json[=BOOL]            Output findings as NDJSON [default: false]
+      --summary[=BOOL]         Print H M L counts and exit [default: false]
+      --one-line[=BOOL]        One line per finding [default: false]
   -h, --help                   Print help
 ```
 
@@ -73,6 +92,9 @@ By default, `shg scan` checks both environment variables and history files.
 With no `--path` flags, `shg` scans existing paths from `paths.*.shg` plus the
 history file named by `HISTFILE`, when set. Use `--env false` or `--hist false`
 to disable a source.
+
+When history is piped via stdin, only stdin is scanned — env and history files
+are skipped unless explicitly requested with `--env=true` or `--hist=true`.
 
 **Examples:**
 
@@ -100,17 +122,21 @@ shg scan --json
 
 # NDJSON piped to jq
 shg scan --json | jq 'select(.severity == "high")'
+
+# Compact one-line output (badge + source + command)
+shg scan --one-line
+
+# Machine-readable counts (H M L) for prompt integration
+shg scan --summary --hist false
 ```
 
-Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
-Use a shell helper if you want scans to include the latest interactive history
-without forcing zsh to write the history file:
+> [!TIP]
+> Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
+> Use a shell helper if you want scans to include the latest interactive history
+> without forcing zsh to write the history file:
+> `shg-scan() { fc -l 1 | shg scan "$@" }`
+>
 
-```sh
-shg-scan() {
-  fc -l -n 1 | shg scan "$@"
-}
-```
 
 **Exit codes:**
 
