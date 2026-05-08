@@ -9,11 +9,11 @@ passwords, bearer tokens, credential URLs, and private keys. Secrets are
 ```
 $ shg scan
 
-[HIGH]   export OPENAI_API_KEY=sk-...UA
-@ ~/.zsh_history:148 [inline_assign]
+[!!!] export OPENAI_API_KEY=s*************...**************5
+      ~/.zsh_history:148 [inline_assign]
 
-[HIGH]   export GITHUB_TOKEN="ghp...P3"
-@ ~/.zsh_history:576 [config_check]
+[!!!] curl -H "Authorization: Bearer g*************...**************5...
+      ~/.zsh_history:576 [auth_header]
 
 2 finding(s) detected (2 high, 0 medium, 0 low).
 Remove flagged history entries and rotate affected credentials.
@@ -34,8 +34,8 @@ Remove flagged history entries and rotate affected credentials.
 ```sh
 git clone https://github.com/vrypan/shg
 cd shg
-zig build -Doptimize=ReleaseSafe
-# binary at zig-out/bin/shg
+zig build
+# binaries at zig-out/bin/shg and zig-out/bin/shg-config
 ```
 
 ## Usage
@@ -46,6 +46,7 @@ shg <command> [options]
 Commands:
   scan      Scan history files for secrets (default)
   patterns  List all detection patterns and examples
+  version   Print version
 ```
 
 ### scan
@@ -147,20 +148,41 @@ The default `paths.default.shg` created by `shg-config defaults` includes:
 | MySQL | `~/.mysql_history` |
 | SQLite | `~/.sqlite_history` |
 | Redis CLI | `~/.rediscli_history` |
+| Node.js REPL | `~/.node_repl_history` |
+| Ruby IRB | `~/.irb_history` |
+| Ruby Pry | `~/.pry_history` |
+| R | `~/.Rhistory` |
 
 ### Redaction format
 
-Secrets are shown as the first 3 characters, `...`, and the last 2:
+Secrets are shown as the first character, `*` for each interior character, and
+the last character — preserving the original token length up to 32 characters.
+Tokens longer than 32 characters are capped with `...` in the middle:
 
 ```
-sk-abcdefghijklmnopqrstuvwxyz  →  sk-...yz
+s3cr3tpassword            →  s************d     (14 chars, preserved)
+sk-abcdefghijklmnopqrstu  →  s*************...**************u  (capped at 32)
 ```
 
-Tokens shorter than 8 characters are replaced entirely with `[REDACTED]`.
+If the detected secret appears before the end of the command, the rest of the
+line is replaced with `...` to avoid exposing any second secret that may follow:
+
+```
+curl -H "Authorization: Bearer g*************...**************5...
+```
+
 Use `--redacted=false` to disable redaction (not recommended for shared output).
 
-When writing to a terminal, `shg` highlights the severity and bolds the
-reported command. Set `NO_COLOR` in the environment to disable terminal styling.
+When writing to a terminal, `shg` colours the severity badge. Set `NO_COLOR`
+in the environment to disable terminal styling.
+
+### Severity badges
+
+| Badge | Severity |
+|---|---|
+| `[!!!]` | High |
+| `[!! ]` | Medium |
+| `[!  ]` | Low |
 
 ## Scoring
 
@@ -173,6 +195,7 @@ Each detection candidate is scored against a set of signals:
 | Token length ≥ 20 chars | +2 |
 | Authorization header | +2 |
 | Credential URL | +2 |
+| Known provider token format | +4 |
 | Private key marker | +6 |
 | Placeholder / test value | −3 |
 | Search command (grep, echo, …) | −2 |
@@ -195,9 +218,9 @@ Configuration files live in `shg`'s config directory:
 
 The config directory contains editable `.shg` files:
 
-- `ignore.*.shg` for patterns that should suppress findings
-- `match.*.shg` for additional patterns that should be scanned
-- `paths.*.shg` for default history paths to scan when `--path` is not used
+- `ignore.*.shg` — patterns that suppress findings
+- `match.*.shg` — additional patterns to flag
+- `paths.*.shg` — history paths to scan when `--path` is not used
 
 Default config templates are maintained as plain text files in `src/defaults/`
 and embedded into `shg-config` at build time.
@@ -216,10 +239,27 @@ Ignore rules take precedence over match rules. If the same text appears in both
 `match.default.shg` and `ignore.my.shg`, the matching command is suppressed and
 does not produce a finding.
 
-Run `shg-config defaults` to write the three default `.shg` files. Existing
-files prompt before overwrite; answer `yes` to replace or `no` to keep that
-file and continue. Use `shg-config defaults -y` to overwrite defaults without
-prompting.
+### shg-config commands
+
+```
+shg-config compile
+```
+Compile all `*.shg` files in the config directory into `rules.bin`. Must be
+re-run after any config change.
+
+```
+shg-config defaults [-y]
+```
+Write the three default `.shg` files (`ignore.default.shg`, `match.default.shg`,
+`paths.default.shg`). Existing files prompt before overwrite; use `-y` to
+overwrite without prompting.
+
+```
+shg-config discover
+```
+Scan your home directory for `.*history` files not yet in your configuration
+and offer to append them to `paths.local.shg`. Run `shg-config compile`
+afterwards to apply the changes.
 
 ## Security
 

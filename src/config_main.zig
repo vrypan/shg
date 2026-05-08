@@ -23,17 +23,27 @@ pub fn main(init: std.process.Init) !void {
             \\Usage:
             \\  shg-config compile
             \\  shg-config defaults [-y]
+            \\  shg-config discover
             \\
         );
         return;
     }
 
     const command = raw_args[1];
-    if (!std.mem.eql(u8, command, "compile") and !std.mem.eql(u8, command, "defaults")) {
-        try stderr.interface.writeAll("error: expected command 'compile' or 'defaults'\n");
+    if (!std.mem.eql(u8, command, "compile") and
+        !std.mem.eql(u8, command, "defaults") and
+        !std.mem.eql(u8, command, "discover"))
+    {
+        try stderr.interface.writeAll("error: expected command 'compile', 'defaults', or 'discover'\n");
         try stderr.flush();
         std.process.exit(2);
     }
+
+    if (std.mem.eql(u8, command, "discover")) {
+        try runDiscover(io, alloc, init.environ_map, &stdout, &stderr);
+        return;
+    }
+
     const force_yes = if (std.mem.eql(u8, command, "defaults"))
         try parseDefaultsArgs(raw_args[2..], &stderr)
     else blk: {
@@ -77,7 +87,7 @@ pub fn main(init: std.process.Init) !void {
     var paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg");
 
     if (ignore_group.count == 0 or match_group.count == 0 or paths_group.count == 0) {
-        try stdout.interface.print("Config files are missing in {s}. Create default ignore.default.shg, match.default.shg, and paths.default.shg? [y/N] ", .{dir});
+        try stdout.interface.print("Config files are missing in {s}. \nCreate default ignore.default.shg, match.default.shg, and paths.default.shg? \n[y/N] ", .{dir});
         try stdout.flush();
         if (try promptYes(io)) {
             if (ignore_group.count == 0 and !fileExists(io, ignore_default_path)) try writeFile(io, ignore_default_path, default_ignore_rules);
@@ -188,6 +198,128 @@ fn readConfigGroup(io: Io, alloc: std.mem.Allocator, dir_path: []const u8, prefi
         if (text.len > 0 and text[text.len - 1] != '\n') try out.append(alloc, '\n');
     }
     return .{ .text = try out.toOwnedSlice(alloc), .count = names.items.len };
+}
+
+fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, stdout: *Io.File.Writer, stderr: *Io.File.Writer) !void {
+    const home = environ.get("HOME") orelse environ.get("USERPROFILE") orelse {
+        try stderr.interface.writeAll("error: cannot determine home directory\n");
+        try stderr.flush();
+        std.process.exit(2);
+    };
+
+    // Collect all .*history files in HOME.
+    var home_dir = Io.Dir.openDirAbsolute(io, home, .{ .iterate = true }) catch |err| {
+        try stderr.interface.print("error: cannot open home directory: {t}\n", .{err});
+        try stderr.flush();
+        std.process.exit(2);
+    };
+    defer home_dir.close(io);
+
+    var found: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (found.items) |p| alloc.free(p);
+        found.deinit(alloc);
+    }
+    var it = home_dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file and entry.kind != .unknown) continue;
+        if (!std.mem.startsWith(u8, entry.name, ".")) continue;
+        if (!std.mem.endsWith(u8, entry.name, "history")) continue;
+        try found.append(alloc, try std.fs.path.join(alloc, &.{ home, entry.name }));
+    }
+
+    if (found.items.len == 0) {
+        try stdout.interface.writeAll("No .*history files found in home directory.\n");
+        return;
+    }
+
+    // Collect paths already known from compiled rules.
+    var known: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (known.items) |p| alloc.free(p);
+        known.deinit(alloc);
+    }
+    if (try config.compiledFile(alloc, environ)) |cp| {
+        defer alloc.free(cp);
+        if (Io.Dir.openFileAbsolute(io, cp, .{})) |f| {
+            defer f.close(io);
+            if (f.stat(io)) |stat| {
+                var read_buf: [8192]u8 = undefined;
+                var reader = f.reader(io, &read_buf);
+                if (reader.interface.readAlloc(alloc, @intCast(stat.size))) |bytes| {
+                    if (rules.Cache.init(bytes)) |cache| {
+                        var i: usize = 0;
+                        while (i < cache.ruleCount()) : (i += 1) {
+                            const r = cache.rule(i) catch continue;
+                            if (r.kind != .path) continue;
+                            const expanded = if (std.mem.startsWith(u8, r.pattern, "~/"))
+                                try std.fs.path.join(alloc, &.{ home, r.pattern[2..] })
+                            else
+                                try alloc.dupe(u8, r.pattern);
+                            try known.append(alloc, expanded);
+                        }
+                    } else |_| {}
+                } else |_| {}
+            } else |_| {}
+        } else |_| {}
+    }
+
+    // Filter to paths not already configured.
+    var novel: std.ArrayList([]const u8) = .empty;
+    defer novel.deinit(alloc);
+    for (found.items) |path| {
+        var already = false;
+        for (known.items) |k| {
+            if (std.mem.eql(u8, path, k)) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) try novel.append(alloc, path);
+    }
+
+    if (novel.items.len == 0) {
+        try stdout.interface.writeAll("All discovered history files are already configured.\n");
+        return;
+    }
+
+    try stdout.interface.writeAll("Found history files not in your current configuration:\n");
+    for (novel.items) |path| {
+        try stdout.interface.print("  {s}\n", .{path});
+    }
+
+    const dir = (try config.configDir(alloc, environ)) orelse {
+        try stderr.interface.writeAll("error: cannot determine config directory\n");
+        try stderr.flush();
+        std.process.exit(2);
+    };
+    const local_path = try std.fs.path.join(alloc, &.{ dir, "paths.local.shg" });
+
+    try stdout.interface.print("\nAdd to {s}? [y/N] ", .{local_path});
+    try stdout.flush();
+    if (!try promptYes(io)) return;
+
+    // Build the text to append (using ~/... paths for portability).
+    var append_buf: std.ArrayList(u8) = .empty;
+    defer append_buf.deinit(alloc);
+    for (novel.items) |path| {
+        const rel = if (std.mem.startsWith(u8, path, home))
+            try std.mem.concat(alloc, u8, &.{ "~/", path[home.len + 1 ..] })
+        else
+            try alloc.dupe(u8, path);
+        defer alloc.free(rel);
+        try append_buf.appendSlice(alloc, rel);
+        try append_buf.append(alloc, '\n');
+    }
+
+    // Append new paths to paths.local.shg.
+    const f = try Io.Dir.createFileAbsolute(io, local_path, .{ .truncate = false });
+    defer f.close(io);
+    const offset = try f.length(io);
+    try f.writePositionalAll(io, append_buf.items, offset);
+
+    try stdout.interface.print("wrote {s}\n", .{local_path});
+    try stdout.interface.writeAll("Run 'shg-config compile' to apply changes.\n");
 }
 
 fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
