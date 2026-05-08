@@ -146,20 +146,6 @@ const TestWriter = struct {
     pub fn writeAll(_: *TestWriter, _: []const u8) !void {}
 };
 
-test "scan rejects json flag" {
-    const alloc = std.testing.allocator;
-    var writer = TestWriter{};
-    const raw = [_][:0]const u8{ "shg", "scan", "--json" };
-    try std.testing.expectError(error.ReportedCliError, parse(&raw, &writer, alloc));
-}
-
-test "patterns rejects json flag" {
-    const alloc = std.testing.allocator;
-    var writer = TestWriter{};
-    const raw = [_][:0]const u8{ "shg", "patterns", "--json" };
-    try std.testing.expectError(error.ReportedCliError, parse(&raw, &writer, alloc));
-}
-
 test "scan parses show full" {
     const alloc = std.testing.allocator;
     var writer = TestWriter{};

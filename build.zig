@@ -42,4 +42,10 @@ pub fn build(b: *std.Build) void {
     });
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+
+    const smoke_cmd = b.addSystemCommand(&.{ "sh", "tests/smoke.sh" });
+    smoke_cmd.step.dependOn(b.getInstallStep());
+    smoke_cmd.setEnvironmentVariable("SHG_BIN", b.getInstallPath(.bin, "shg"));
+    const smoke_step = b.step("smoke", "Run end-to-end smoke tests");
+    smoke_step.dependOn(&smoke_cmd.step);
 }
