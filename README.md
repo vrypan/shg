@@ -2,6 +2,10 @@
 
 Scan shell history files for accidentally persisted secrets.
 
+> [!IMPORTANT]
+> `shg` will not make you 100% safe. 
+> But it will make you safer, and help you build some good shell habits.
+
 `shg` reads your shell history and flags entries that look like API keys,
 passwords, bearer tokens, credential URLs, and private keys. Secrets are
 **redacted in all output by default** — the full value is never printed.
@@ -245,6 +249,9 @@ line, and a leading `~/` expands to the user's home directory.
 Ignore rules take precedence over match rules. If the same text appears in both
 `match.default.shg` and `ignore.my.shg`, the matching command is suppressed and
 does not produce a finding.
+
+> [!NOTE]
+> `match.default.shg` is based on https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
 
 ### shg-config commands
 

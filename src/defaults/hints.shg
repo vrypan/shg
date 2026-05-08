@@ -6,20 +6,95 @@
 #
 # prefix: lines are checked first and take priority over det_type lines.
 
-# Provider-specific hints (most specific first within each provider family)
+# Anthropic
+prefix:sk-ant-admin01-	Anthropic admin API key — rotate at console.anthropic.com/settings/keys
 prefix:sk-ant-api03	Anthropic API key — rotate at console.anthropic.com/settings/keys
 prefix:sk-ant-	Anthropic API key — rotate at console.anthropic.com/settings/keys
+
+# OpenAI
 prefix:sk-proj-	OpenAI project key — rotate at platform.openai.com/api-keys
 prefix:sk-	OpenAI API key — rotate at platform.openai.com/api-keys
+
+# GitHub
 prefix:github_pat_	GitHub fine-grained personal access token — rotate at github.com/settings/tokens
 prefix:ghp_	GitHub personal access token — rotate at github.com/settings/tokens
 prefix:ghs_	GitHub App installation token — rotate at github.com/settings/installations
 prefix:gho_	GitHub OAuth token — rotate at github.com/settings/applications
+
+# GitLab
+prefix:glpat-	GitLab personal access token — rotate at gitlab.com/-/user_settings/personal_access_tokens
+
+# Slack
 prefix:xoxb-	Slack bot token — rotate at api.slack.com/apps
 prefix:xoxp-	Slack user token — rotate at api.slack.com/apps
+
+# AWS
 prefix:AKIA	AWS access key ID — rotate in the AWS IAM console (iam.aws.amazon.com)
+prefix:ABSK	AWS Bedrock API key — rotate in the AWS IAM console
+
+# Stripe
 prefix:sk_live_	Stripe live secret key — rotate at dashboard.stripe.com/apikeys
 prefix:sk_test_	Stripe test secret key — rotate at dashboard.stripe.com/apikeys
+prefix:rk_live_	Stripe live restricted key — rotate at dashboard.stripe.com/apikeys
+prefix:whsec_	Stripe webhook secret — rotate at dashboard.stripe.com/webhooks
+
+# Google
+prefix:AIza	Google API key — rotate at console.cloud.google.com/apis/credentials
+
+# HuggingFace
+prefix:hf_	HuggingFace API token — rotate at huggingface.co/settings/tokens
+
+# npm
+prefix:npm_	npm access token — rotate at npmjs.com/settings/tokens
+
+# DigitalOcean
+prefix:dop_v1_	DigitalOcean personal access token — rotate at cloud.digitalocean.com/account/api/tokens
+prefix:doo_v1_	DigitalOcean OAuth token — rotate at cloud.digitalocean.com/account/api/tokens
+
+# Databricks
+prefix:dapi	Databricks API token — rotate at your Databricks workspace settings
+
+# Notion
+prefix:ntn_	Notion integration token — rotate at notion.so/profile/integrations
+
+# Perplexity
+prefix:pplx-	Perplexity AI API key — rotate at perplexity.ai/settings/api
+
+# Brevo (Sendinblue)
+prefix:xkeysib-	Brevo API key — rotate at app.brevo.com/settings/keys
+
+# Sentry
+prefix:sntryu_	Sentry user auth token — rotate at sentry.io/settings/auth-tokens
+
+# PyPI
+prefix:pypi-AgEIcHlwaS5vcmc	PyPI API token — rotate at pypi.org/manage/account/token
+
+# Alibaba Cloud
+prefix:LTAI	Alibaba Cloud access key — rotate at ram.console.aliyun.com
+
+# 1Password
+prefix:ops_eyJ	1Password service account token — rotate at 1password.com/developer-docs
+
+# New Relic
+prefix:NRJS-	New Relic browser key — rotate at one.newrelic.com/api-keys
+prefix:NRII-	New Relic ingest key — rotate at one.newrelic.com/api-keys
+prefix:NRAK-	New Relic admin API key — rotate at one.newrelic.com/api-keys
+
+# RubyGems
+prefix:rubygems_	RubyGems API key — rotate at rubygems.org/profile/api_keys
+
+# Pulumi
+prefix:pul-	Pulumi access token — rotate at app.pulumi.com/account/tokens
+
+# HashiCorp Vault
+prefix:hvb.	HashiCorp Vault batch token — revoke via vault token revoke
+
+# PlanetScale
+prefix:pscale_tkn_	PlanetScale service token — rotate at app.planetscale.com/settings
+prefix:pscale_oauth_	PlanetScale OAuth token — rotate at app.planetscale.com/settings
+
+# Typeform
+prefix:tfp_	Typeform personal access token — rotate at admin.typeform.com/account/tokens
 
 # Detection category fallbacks
 private_key	Private key in history — revoke and regenerate the key pair immediately

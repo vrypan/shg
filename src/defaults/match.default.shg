@@ -1,25 +1,100 @@
 # shg match rules
 # Lines are substring matches by default. Use exact:, prefix:, or substr:.
+# Anthropic
+sk-ant-admin01-
 sk-ant-
+
+# OpenAI
+sk-proj-
 sk-
+
+# GitHub
 github_pat_
 ghp_
 gho_
 ghu_
 ghs_
 ghr_
+
+# GitLab
+glpat-
+
+# Slack
 xoxb-
 xoxp-
 xapp-
 xwfp-
+
+# AWS
 AKIA
 ASIA
+ABSK
+
+# Stripe
 sk_live_
 sk_test_
 rk_live_
 rk_test_
 whsec_
 sk_org_
+
+# Google
+AIza
+
+# HuggingFace
+hf_
+
+# npm
+npm_
+
+# DigitalOcean
+dop_v1_
+doo_v1_
+
+# Databricks
+dapi
+
+# Notion
+ntn_
+
+# Perplexity
+pplx-
+
+# Brevo (Sendinblue)
+xkeysib-
+
+# Sentry
+sntryu_
+
+# PyPI
+pypi-AgEIcHlwaS5vcmc
+
+# Alibaba Cloud
+LTAI
+
+# 1Password service account
+ops_eyJ
+
+# New Relic
+NRJS-
+NRII-
+NRAK-
+
+# RubyGems
+rubygems_
+
+# Pulumi
+pul-
+
+# HashiCorp Vault batch token
+hvb.
+
+# PlanetScale
+pscale_tkn_
+pscale_oauth_
+
+# Typeform
+tfp_
 -----BEGIN PRIVATE KEY-----
 -----BEGIN ENCRYPTED PRIVATE KEY-----
 -----BEGIN OPENSSH PRIVATE KEY-----
