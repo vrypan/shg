@@ -76,3 +76,8 @@ jobs:
         run: |
           git tag ${{ needs.version.outputs.tag }}
           git push origin ${{ needs.version.outputs.tag }}
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: bash .github/scripts/update-homebrew-formula.sh ${{ needs.version.outputs.tag }}
