@@ -12,7 +12,7 @@ pub const Args = struct {
     paths: []const []const u8,
     scan_env: bool,
     scan_hist: bool,
-    min_severity: Severity,
+    level: Severity,
     entropy_threshold: f64,
     redacted: bool,
 };
@@ -27,7 +27,7 @@ const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",  .repeatable = true },
     .{ .name = "env",                              .value = .bool_optional,                  .description = "Scan environment variables", .default_value = "true" },
     .{ .name = "hist",                             .value = .bool_optional,                  .description = "Scan history files",          .default_value = "true" },
-    .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
+    .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
     .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
 };
@@ -115,9 +115,9 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 }
             }
 
-            const sev_str = parsed.last("min-severity") orelse "high";
-            const min_sev = parseSeverity(sev_str) orelse {
-                try writer.print("error: invalid --min-severity value '{s}' (use low, medium, or high)\n", .{sev_str});
+            const level_str = parsed.last("level") orelse "high";
+            const level = parseSeverity(level_str) orelse {
+                try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
                 return error.ReportedCliError;
             };
 
@@ -132,7 +132,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .paths = try paths.toOwnedSlice(alloc),
                 .scan_env = zecli.parseBool(parsed.last("env") orelse "true") catch unreachable,
                 .scan_hist = zecli.parseBool(parsed.last("hist") orelse "true") catch unreachable,
-                .min_severity = min_sev,
+                .level = level,
                 .entropy_threshold = entropy_threshold,
                 .redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable,
             };
@@ -153,7 +153,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .paths = &.{},
         .scan_env = true,
         .scan_hist = true,
-        .min_severity = .high,
+        .level = .high,
         .entropy_threshold = 3.5,
         .redacted = true,
     };
@@ -187,7 +187,7 @@ test "scan source flags default to enabled" {
     const args = try parse(&raw, &writer, alloc);
     try std.testing.expect(args.scan_env);
     try std.testing.expect(args.scan_hist);
-    try std.testing.expect(args.min_severity == .high);
+    try std.testing.expect(args.level == .high);
 }
 
 test "scan source flags can be disabled" {

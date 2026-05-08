@@ -64,7 +64,7 @@ printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$home/.zsh_history"
 run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" "$shg" scan --env false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$home/.zsh_history"
-printf '%s\n' "$output" | grep -q 'type:    config_check'
+printf '%s\n' "$output" | grep -q '\[config_check\]'
 say "PASS configured history paths"
 
 say "TEST environment history path"
@@ -73,7 +73,7 @@ printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$histfile"
 run_capture env XDG_CONFIG_HOME="$xdg" HISTFILE="$histfile" "$shg" scan --env false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$histfile"
-printf '%s\n' "$output" | grep -q 'type:    config_check'
+printf '%s\n' "$output" | grep -q '\[config_check\]'
 say "PASS environment history path"
 
 say "TEST zsh history flush warning"
@@ -86,7 +86,7 @@ say "TEST piped history"
 run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false' sh "$xdg" "$shg"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '<stdin>'
-printf '%s\n' "$output" | grep -q 'type:    config_check'
+printf '%s\n' "$output" | grep -q '\[config_check\]'
 say "PASS piped history"
 
 say "TEST explicit path ignores piped history"
@@ -96,10 +96,10 @@ printf '%s\n' "$output" | grep -q 'No findings detected.'
 say "PASS explicit path ignores piped history"
 
 say "TEST scan true-positive corpus"
-run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp" --min-severity low
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp" --level low
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '5 finding(s) detected (3 high, 2 medium, 0 low).'
-printf '%s\n' "$output" | grep -q 'type:    credential_url'
+printf '%s\n' "$output" | grep -q '\[credential_url\]'
 if printf '%s\n' "$output" | grep -q "$full_secret"; then
     printf '%s\n' "redacted scan output leaked full secret" >&2
     exit 1
@@ -107,7 +107,7 @@ fi
 say "PASS scan true-positive corpus"
 
 say "TEST scan true-positive corpus with --redacted=false"
-run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --redacted=false --path "$tp" --min-severity low
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --redacted=false --path "$tp" --level low
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$full_secret"
 say "PASS scan true-positive corpus with --redacted=false"
@@ -122,7 +122,7 @@ say "TEST scan environment variables"
 run_capture env -i XDG_CONFIG_HOME="$xdg" SHG_SMOKE_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 "$shg" scan --hist false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '<env>'
-printf '%s\n' "$output" | grep -q 'type:    inline_assign'
+printf '%s\n' "$output" | grep -q '\[inline_assign\]'
 if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; then
     printf '%s\n' "environment scan output leaked full secret" >&2
     exit 1
@@ -155,7 +155,7 @@ run_capture env -i XDG_CONFIG_HOME="$xdg" \
     EXTRA_VALUE=extra-secret-pattern \
     "$shg" scan --hist false
 test "$status" -eq 1
-printf '%s\n' "$output" | grep -q 'type:    config_check'
+printf '%s\n' "$output" | grep -q '\[config_check\]'
 printf '%s\n' "$output" | grep -q 'EXTRA_VALUE'
 if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; then
     printf '%s\n' "ignore.*.shg did not suppress ignored token" >&2

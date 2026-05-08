@@ -49,5 +49,9 @@ pub const Finding = struct {
     severity: Severity,
     score: i32,
     redacted_cmd: []const u8,
+    redacted_match_start: usize = 0,
+    redacted_match_len: usize = 0,
+    full_match_start: usize = 0,
+    full_match_len: usize = 0,
     recommendation: []const u8,
 };

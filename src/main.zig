@@ -52,8 +52,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const report_opts = report.Options{
-        .min_severity = args.min_severity,
+        .level = args.level,
         .redacted = args.redacted,
+        .color = try colorEnabled(io, init.environ_map),
     };
 
     var counts = [4]usize{ 0, 0, 0, 0 };
@@ -81,7 +82,7 @@ pub fn main(init: std.process.Init) !void {
             var read_buf: [65536]u8 = undefined;
             var reader = Io.File.stdin().readerStreaming(io, &read_buf);
             const entries = try parseFile(&reader.interface, "<stdin>", a);
-            try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
+            try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
         } else {
             const paths: []const []const u8 = if (args.paths.len > 0)
                 args.paths
@@ -106,7 +107,7 @@ pub fn main(init: std.process.Init) !void {
                 var read_buf: [65536]u8 = undefined;
                 var reader = file.reader(io, &read_buf);
                 const entries = try parseFile(&reader.interface, path, a);
-                try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
+                try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
             }
         }
     }
@@ -116,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
         defer arena.deinit();
         const a = arena.allocator();
         const entries = try parseEnv(init.environ_map, a);
-        try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
+        try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
     try report.printSummary(&stdout, counts);
@@ -141,6 +142,11 @@ fn stdinHasHistory(io: Io) !bool {
     if (try stdin.isTty(io)) return false;
     const stat = try stdin.stat(io);
     return stat.kind == .file or stat.kind == .named_pipe;
+}
+
+fn colorEnabled(io: Io, environ: *const std.process.Environ.Map) !bool {
+    if (environ.get("NO_COLOR")) |_| return false;
+    return try Io.File.stdout().isTty(io);
 }
 
 fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?rules.Cache {
@@ -187,7 +193,7 @@ fn scanEntries(
     entries: []const Entry,
     alloc: std.mem.Allocator,
     entropy_threshold: f64,
-    min_severity: Severity,
+    level: Severity,
     report_opts: report.Options,
     rules_cache: ?rules.Cache,
     stdout: *Io.File.Writer,
@@ -198,7 +204,7 @@ fn scanEntries(
         const findings = try detectEntry(e, alloc, entropy_threshold, rules_cache);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
-            if (@intFromEnum(f.severity) < @intFromEnum(min_severity)) continue;
+            if (@intFromEnum(f.severity) < @intFromEnum(level)) continue;
             has_findings.* = true;
             counts[@intFromEnum(f.severity)] += 1;
             try report.printFinding(stdout, f, report_opts);
@@ -240,12 +246,17 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
             const s = scorer.score(c.signals, entropy_threshold);
             const sev = scorer.severity(s);
             const redacted = try redact.redactCommand(e.command, c.token, alloc);
+            const full_match = commandMatchSpan(e.command, c.token);
             try findings.append(alloc, .{
                 .entry = e,
                 .det_type = c.det_type,
                 .severity = sev,
                 .score = s,
-                .redacted_cmd = redacted,
+                .redacted_cmd = redacted.text,
+                .redacted_match_start = redacted.match_start,
+                .redacted_match_len = redacted.match_len,
+                .full_match_start = full_match.start,
+                .full_match_len = full_match.len,
                 .recommendation = getRecommendation(c.det_type),
             });
         }
@@ -259,18 +270,34 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
             const token = configCheckToken(rule, e.command) orelse rule.pattern;
             if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;
             const redacted = try redact.redactCommand(e.command, token, alloc);
+            const full_match = commandMatchSpan(e.command, token);
             try findings.append(alloc, .{
                 .entry = e,
                 .det_type = "config_check",
                 .severity = .high,
                 .score = 7,
-                .redacted_cmd = redacted,
+                .redacted_cmd = redacted.text,
+                .redacted_match_start = redacted.match_start,
+                .redacted_match_len = redacted.match_len,
+                .full_match_start = full_match.start,
+                .full_match_len = full_match.len,
                 .recommendation = "Review this configured pattern match",
             });
         }
     }
 
     return findings.toOwnedSlice(alloc);
+}
+
+const MatchSpan = struct {
+    start: usize,
+    len: usize,
+};
+
+fn commandMatchSpan(command: []const u8, token: []const u8) MatchSpan {
+    if (token.len == 0) return .{ .start = 0, .len = 0 };
+    const start = std.mem.indexOf(u8, command, token) orelse return .{ .start = 0, .len = 0 };
+    return .{ .start = start, .len = token.len };
 }
 
 fn hasHighSeverityToken(findings: []const Finding, tokens: []const []const u8, token: []const u8) bool {

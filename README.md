@@ -9,15 +9,11 @@ passwords, bearer tokens, credential URLs, and private keys. Secrets are
 ```
 $ shg scan
 
-[HIGH] ~/.zsh_history:148
-  type:    inline_assign
-  command: export OPENAI_API_KEY=sk-...UA
-  action:  Remove this history entry and rotate the credential
+[HIGH]   export OPENAI_API_KEY=sk-...UA
+@ ~/.zsh_history:148 [inline_assign]
 
-[HIGH] ~/.zsh_history:576
-  type:    config_check
-  command: export GITHUB_TOKEN="ghp...P3"
-  action:  Review this configured pattern match
+[HIGH]   export GITHUB_TOKEN="ghp...P3"
+@ ~/.zsh_history:576 [config_check]
 
 2 finding(s) detected (2 high, 0 medium, 0 low).
 Remove flagged history entries and rotate affected credentials.
@@ -61,7 +57,7 @@ Options:
   -p, --path <FILE>            History file to scan [repeatable]
       --env[=BOOL]             Scan environment variables [default: true]
       --hist[=BOOL]            Scan history files [default: true]
-      --min-severity <LEVEL>   low|medium|high [default: high]
+      --level <LEVEL>          low|medium|high [default: high]
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
       --redacted[=BOOL]        Redact secrets in output [default: true]
   -h, --help                   Print help
@@ -91,7 +87,7 @@ shg scan --path ~/.zsh_history --path ~/.bash_history
 cat ~/.zsh_history | shg scan --env false
 
 # Include low and medium findings
-shg scan --min-severity low
+shg scan --level low
 ```
 
 Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
@@ -108,14 +104,14 @@ shg-scan() {
 
 | Code | Meaning |
 |------|---------|
-| 0 | No findings at or above `--min-severity` |
+| 0 | No findings at or above `--level` |
 | 1 | One or more findings detected |
 | 2 | Error (bad arguments, unreadable file) |
 
 This makes `shg` scriptable:
 
 ```sh
-shg scan --min-severity high && echo "clean"
+shg scan --level high && echo "clean"
 ```
 
 ## Detection
@@ -162,6 +158,9 @@ sk-abcdefghijklmnopqrstuvwxyz  →  sk-...yz
 
 Tokens shorter than 8 characters are replaced entirely with `[REDACTED]`.
 Use `--redacted=false` to disable redaction (not recommended for shared output).
+
+When writing to a terminal, `shg` highlights the severity and bolds the
+reported command. Set `NO_COLOR` in the environment to disable terminal styling.
 
 ## Scoring
 
