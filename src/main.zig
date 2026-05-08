@@ -47,10 +47,6 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (args.subcommand == .help or args.subcommand == .version) return;
-    if (args.subcommand == .patterns) {
-        try printPatterns(&stdout);
-        return;
-    }
 
     const report_opts = report.Options{
         .level = args.level,
@@ -131,7 +127,6 @@ pub fn main(init: std.process.Init) !void {
 
     if (has_findings) std.process.exit(1);
 }
-
 
 fn stdinHasHistory(io: Io) !bool {
     const stdin = Io.File.stdin();
@@ -325,21 +320,6 @@ fn isConfigTokenChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '/';
 }
 
-fn printPatterns(w: *Io.File.Writer) !void {
-    try w.interface.writeAll(
-        \\Detection categories:
-        \\
-        \\  inline_assign     VAR=value with sensitive keywords
-        \\  auth_header       Authorization: Bearer <token>, --password <val>
-        \\  credential_url    scheme://user:pass@host
-        \\  config_check      compiled match.*.shg pattern match
-        \\  private_key       -----BEGIN * KEY----- markers
-        \\  age_secret_key    AGE-SECRET-KEY-1... markers
-        \\  ssh_key           ssh-rsa AAAA... public keys
-        \\
-    );
-}
-
 // Pull in tests from all submodules.
 test {
     _ = @import("entropy.zig");
@@ -383,7 +363,9 @@ test "explicit zsh-format fixture path preserves extended commands" {
 test "duplicate token candidates collapse to one finding" {
     const alloc = std.testing.allocator;
     const e = Entry{
-        .file = "test", .line = 1, .timestamp = null,
+        .file = "test",
+        .line = 1,
+        .timestamp = null,
         .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
@@ -434,7 +416,8 @@ test "compiled ignore rules suppress environment assignments" {
     try env.put("OLD_PWD", "/Users/example/old");
     try env.put("GITHUB_PUBLIC_REPOS_TOKEN", "ghp_abcdefghijklmnopqrstuvwxyz012345");
 
-    const cache_bytes = try rules.compile(alloc,
+    const cache_bytes = try rules.compile(
+        alloc,
         \\prefix:SSH_AUTH_SOCK=
         \\prefix:STARSHIP_SESSION_KEY=
         \\prefix:GPG_AGENT_INFO=

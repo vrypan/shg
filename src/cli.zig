@@ -5,7 +5,7 @@ const build_options = @import("build_options");
 
 pub const version = build_options.version;
 
-pub const Subcommand = enum { scan, patterns, help, version };
+pub const Subcommand = enum { scan, help, version };
 
 pub const Args = struct {
     subcommand: Subcommand,
@@ -23,9 +23,8 @@ pub const Args = struct {
 };
 
 const commands = [_]zecli.CommandEntry{
-    .{ .name = "scan",     .description = "Scan history files for secrets (default)" },
-    .{ .name = "patterns", .description = "List all detection patterns and examples" },
-    .{ .name = "version",  .description = "Print version"                            },
+    .{ .name = "scan",    .description = "Scan history files for secrets (default)" },
+    .{ .name = "version", .description = "Print version"                            },
 };
 
 const scan_flags = [_]zecli.FlagSpec{
@@ -45,12 +44,11 @@ const scan_spec = zecli.CommandSpec{
     .description = "Scan shell history files for accidentally persisted secrets.",
     .usage       = "shg scan [options]",
     .flags       = &scan_flags,
-};
-
-const patterns_spec = zecli.CommandSpec{
-    .name        = "patterns",
-    .description = "List all detection categories with examples.",
-    .usage       = "shg patterns",
+    .extra_help  =
+        \\
+        \\Use 'shg-config status' to list active detection patterns and rules.
+        \\
+    ,
 };
 
 const root_spec = zecli.CommandSpec{
@@ -60,6 +58,7 @@ const root_spec = zecli.CommandSpec{
     .extra_help  =
         \\
         \\Run 'shg <command> --help' for command-specific options.
+        \\Use 'shg-config status' to list active detection patterns and rules.
         \\
     ,
 };
@@ -74,9 +73,6 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
         const first = raw[1];
         if (std.mem.eql(u8, first, "scan")) {
             subcmd = .scan;
-            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
-        } else if (std.mem.eql(u8, first, "patterns")) {
-            subcmd = .patterns;
             subcmd_args = if (raw.len > 2) raw[2..] else &.{};
         } else if (std.mem.eql(u8, first, "version")) {
             subcmd = .version;
@@ -100,14 +96,6 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             try zecli.printCommandHelp(alloc, writer, root_spec);
             try zecli.printCommandList(writer, &commands);
             return defaultArgs(.help);
-        },
-        .patterns => {
-            if (zecli.helpRequested(subcmd_args)) {
-                try zecli.printCommandHelp(alloc, writer, patterns_spec);
-            } else {
-                _ = try zecli.parseCommand(alloc, writer, subcmd_args, patterns_spec);
-            }
-            return defaultArgs(.patterns);
         },
         .scan => {
             if (zecli.helpRequested(subcmd_args)) {

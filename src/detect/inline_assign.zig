@@ -16,7 +16,7 @@ const placeholder_values = [_][]const u8{
 };
 
 const search_commands = [_][]const u8{
-    "grep ", "sed ", "awk ", "echo ", "cat ", "less ", "more ", "head ", "tail ",
+    "grep ", "sed ", "awk ", "cat ", "less ", "more ", "head ", "tail ",
 };
 
 pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
@@ -159,12 +159,21 @@ test "inline assign detects expanded sensitive keywords" {
     try std.testing.expect(cs[0].signals.has_sensitive_keyword);
 }
 
-test "inline assign detects assignment fragments" {
+test "inline assign detects echo assignment without search penalty" {
     const alloc = std.testing.allocator;
     const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347", .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347" };
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
     try std.testing.expect(cs.len == 1);
     try std.testing.expectEqualStrings("sdkjfhskjfhaskfhsakhfkshfkasjkb347", cs[0].token);
+    try std.testing.expect(!cs[0].signals.is_search_command);
+}
+
+test "inline assign applies search penalty for grep" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "grep password=sdkjfhskjfhaskfhsakhfkshfkasjkb347 /etc/config", .command = "grep password=sdkjfhskjfhaskfhsakhfkshfkasjkb347 /etc/config" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
     try std.testing.expect(cs[0].signals.is_search_command);
 }

@@ -24,6 +24,7 @@ pub fn main(init: std.process.Init) !void {
             \\  shg-config compile
             \\  shg-config defaults [-y]
             \\  shg-config discover
+            \\  shg-config status
             \\
         );
         return;
@@ -32,15 +33,21 @@ pub fn main(init: std.process.Init) !void {
     const command = raw_args[1];
     if (!std.mem.eql(u8, command, "compile") and
         !std.mem.eql(u8, command, "defaults") and
-        !std.mem.eql(u8, command, "discover"))
+        !std.mem.eql(u8, command, "discover") and
+        !std.mem.eql(u8, command, "status"))
     {
-        try stderr.interface.writeAll("error: expected command 'compile', 'defaults', or 'discover'\n");
+        try stderr.interface.writeAll("error: expected command 'compile', 'defaults', 'discover', or 'status'\n");
         try stderr.flush();
         std.process.exit(2);
     }
 
     if (std.mem.eql(u8, command, "discover")) {
         try runDiscover(io, alloc, init.environ_map, &stdout, &stderr);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "status")) {
+        try runStatus(io, alloc, init.environ_map, &stdout);
         return;
     }
 
@@ -320,6 +327,72 @@ fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Env
 
     try stdout.interface.print("wrote {s}\n", .{local_path});
     try stdout.interface.writeAll("Run 'shg-config compile' to apply changes.\n");
+}
+
+fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, stdout: *Io.File.Writer) !void {
+    const dir = (try config.configDir(alloc, environ)) orelse "(not found)";
+    const compiled_path = try config.compiledFile(alloc, environ);
+    try stdout.interface.print("Config directory: {s}\n", .{dir});
+    try stdout.interface.print("Compiled rules:   {s}\n\n", .{compiled_path orelse "(none)"});
+
+    try stdout.interface.writeAll(
+        \\Detection categories:
+        \\
+        \\  inline_assign     VAR=value with sensitive keywords
+        \\  auth_header       Authorization: Bearer <token>, --password <val>
+        \\  credential_url    scheme://user:pass@host
+        \\  config_check      compiled match.*.shg pattern match
+        \\  private_key       -----BEGIN * KEY----- markers
+        \\  age_secret_key    AGE-SECRET-KEY-1... markers
+        \\  ssh_key           ssh-rsa / ssh-ed25519 / ecdsa public keys
+        \\
+    );
+
+    const cache = blk: {
+        const path = compiled_path orelse break :blk null;
+        const f = Io.Dir.openFileAbsolute(io, path, .{}) catch break :blk null;
+        defer f.close(io);
+        const stat = f.stat(io) catch break :blk null;
+        var read_buf: [8192]u8 = undefined;
+        var reader = f.reader(io, &read_buf);
+        const bytes = reader.interface.readAlloc(alloc, @intCast(stat.size)) catch break :blk null;
+        break :blk rules.Cache.init(bytes) catch null;
+    };
+
+    const c = cache orelse {
+        try stdout.interface.writeAll("Compiled rules: none — run shg-config compile\n");
+        return;
+    };
+
+    const sections = [_]struct { kind: rules.RuleKind, label: []const u8 }{
+        .{ .kind = .check,  .label = "Match rules:"   },
+        .{ .kind = .ignore, .label = "Ignore rules:"  },
+        .{ .kind = .path,   .label = "History paths:" },
+    };
+
+    for (sections) |section| {
+        var found = false;
+        var i: usize = 0;
+        while (i < c.ruleCount()) : (i += 1) {
+            const rule = try c.rule(i);
+            if (rule.kind != section.kind) continue;
+            if (!found) {
+                try stdout.interface.print("\n{s}\n\n", .{section.label});
+                found = true;
+            }
+            if (section.kind == .path) {
+                try stdout.interface.print("  {s}\n", .{rule.pattern});
+            } else {
+                const kind_str = switch (rule.match_kind) {
+                    .prefix    => "prefix",
+                    .exact     => "exact ",
+                    .substring => "substr",
+                };
+                try stdout.interface.print("  {s}  {s}\n", .{ kind_str, rule.pattern });
+            }
+        }
+        if (found) try stdout.interface.writeByte('\n');
+    }
 }
 
 fn lessThanString(_: void, a: []const u8, b: []const u8) bool {

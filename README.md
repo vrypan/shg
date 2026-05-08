@@ -131,11 +131,11 @@ shg scan --summary --hist false
 ```
 
 > [!TIP]
-> Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
+> Zsh may keep recent commands in memory before writing them to `$HISTFILE`.  
 > Use a shell helper if you want scans to include the latest interactive history
-> without forcing zsh to write the history file:
-> `shg-scan() { fc -l 1 | shg scan "$@" }`
+> without forcing zsh to write the history file:  
 >
+> `shg-scan() { fc -l 1 | shg scan "$@" }`
 
 
 **Exit codes:**
@@ -192,20 +192,19 @@ The default `paths.default.shg` created by `shg-config defaults` includes:
 
 ### Redaction format
 
-Secrets are shown as the first character, `*` for each interior character, and
-the last character — preserving the original token length up to 32 characters.
-Tokens longer than 32 characters are capped with `...` in the middle:
+The number of plaintext characters shown depends on token length:
 
-```
-s3cr3tpassword            →  s************d     (14 chars, preserved)
-sk-abcdefghijklmnopqrstu  →  s*************...**************u  (capped at 32)
-```
+| Token length | Visible chars | Example |
+|---|---|---|
+| ≤ 8 chars | 1 each side | `ghp_*bcde` |
+| 9–32 chars | 4 each side | `ghp_******ghij` |
+| > 32 chars | 4 each side, capped at 32 with `...` in the middle | `ghp_**********...***********2345` |
 
 If the detected secret appears before the end of the command, the rest of the
 line is replaced with `...` to avoid exposing any second secret that may follow:
 
 ```
-curl -H "Authorization: Bearer g*************...**************5...
+curl -H "Authorization: Bearer ghp_**********...***********2345...
 ```
 
 Use `--redacted=false` to disable redaction (not recommended for shared output).
