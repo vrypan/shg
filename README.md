@@ -2,6 +2,8 @@
 
 Scan shell history files for accidentally persisted secrets.
 
+![](screenshot.png)
+
 > [!IMPORTANT]
 > `shg` will not make you 100% safe. 
 > But it will make you safer, and help you build some good shell habits.
