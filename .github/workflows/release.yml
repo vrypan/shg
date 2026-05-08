@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  version:
+    name: Read version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.read.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse version from build.zig.zon
+        id: read
+        run: |
+          version=$(grep -oP '(?<=\.version = ")[^"]+' build.zig.zon)
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-macos
+            os: macos-latest
+          - target: x86_64-macos
+            os: macos-latest
+          - target: aarch64-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-linux-musl
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: '0.16.0'
+
+      - name: Build
+        run: zig build -Dtarget=${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir dist
+          tar czf dist/shg-${{ needs.version.outputs.tag }}-${{ matrix.target }}.tar.gz \
+            -C zig-out/bin shg shg-config
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shg-${{ matrix.target }}
+          path: dist/
+
+  release:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+
+      - name: Create tag
+        run: |
+          git tag ${{ needs.version.outputs.tag }}
+          git push origin ${{ needs.version.outputs.tag }}
