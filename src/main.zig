@@ -9,6 +9,7 @@ const scorer = @import("scorer.zig");
 const redact = @import("redact.zig");
 const report = @import("report.zig");
 const rules = @import("rules.zig");
+const hints = @import("hints.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
@@ -258,7 +259,7 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
                 .redacted_match_len = redacted.match_len,
                 .full_match_start = full_match.start,
                 .full_match_len = full_match.len,
-                .recommendation = getRecommendation(c.det_type),
+                .recommendation = hints.lookup(c.det_type, c.token),
             });
         }
     }
@@ -282,7 +283,7 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
                 .redacted_match_len = redacted.match_len,
                 .full_match_start = full_match.start,
                 .full_match_len = full_match.len,
-                .recommendation = "Review this configured pattern match",
+                .recommendation = hints.lookup("config_check", token),
             });
         }
     }
@@ -330,13 +331,6 @@ fn isConfigTokenChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '/';
 }
 
-fn getRecommendation(det_type: []const u8) []const u8 {
-    if (std.mem.eql(u8, det_type, "private_key") or
-        std.mem.eql(u8, det_type, "ssh_key")) return "Private key must not appear in shell history";
-    if (std.mem.eql(u8, det_type, "credential_url")) return "Avoid embedding credentials in URLs";
-    return "Remove this history entry and rotate the credential";
-}
-
 fn printPatterns(w: *Io.File.Writer) !void {
     try w.interface.writeAll(
         \\Detection categories:
@@ -355,6 +349,7 @@ fn printPatterns(w: *Io.File.Writer) !void {
 // Pull in tests from all submodules.
 test {
     _ = @import("entropy.zig");
+    _ = @import("hints.zig");
     _ = @import("redact.zig");
     _ = @import("scorer.zig");
     _ = @import("config.zig");

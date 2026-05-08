@@ -39,6 +39,7 @@ fn printHuman(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     try printCommand(w, cmd, opts.color);
     try w.interface.writeByte('\n');
     try w.interface.print("      {s}:{d} [{s}]\n", .{ f.entry.file, f.entry.line, f.det_type });
+    try w.interface.print("      {s}\n", .{f.recommendation});
     try w.interface.writeByte('\n');
 }
 

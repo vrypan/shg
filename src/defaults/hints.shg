@@ -1,0 +1,31 @@
+# Rotation hints for shg findings.
+# Format: <key><TAB><hint>
+# Keys:
+#   prefix:<TOKEN>   matched when the found token starts with TOKEN (longest match wins)
+#   <det_type>       fallback matched by detection category
+#
+# prefix: lines are checked first and take priority over det_type lines.
+
+# Provider-specific hints (most specific first within each provider family)
+prefix:sk-ant-api03	Anthropic API key — rotate at console.anthropic.com/settings/keys
+prefix:sk-ant-	Anthropic API key — rotate at console.anthropic.com/settings/keys
+prefix:sk-proj-	OpenAI project key — rotate at platform.openai.com/api-keys
+prefix:sk-	OpenAI API key — rotate at platform.openai.com/api-keys
+prefix:ghp_	GitHub personal access token — rotate at github.com/settings/tokens
+prefix:ghs_	GitHub App installation token — rotate at github.com/settings/installations
+prefix:gho_	GitHub OAuth token — rotate at github.com/settings/applications
+prefix:xoxb-	Slack bot token — rotate at api.slack.com/apps
+prefix:xoxp-	Slack user token — rotate at api.slack.com/apps
+prefix:AKIA	AWS access key ID — rotate in the AWS IAM console (iam.aws.amazon.com)
+prefix:sk_live_	Stripe live secret key — rotate at dashboard.stripe.com/apikeys
+prefix:sk_test_	Stripe test secret key — rotate at dashboard.stripe.com/apikeys
+
+# Detection category fallbacks
+private_key	Private key in history — revoke and regenerate the key pair immediately
+ssh_key	SSH key in history — if leaked, remove from authorized_keys and generate a new pair (ssh-keygen)
+credential_url	Credentials embedded in a URL — remove the entry and rotate the password
+auth_header	Bearer token or credential in a request — remove the entry and rotate the token
+auth_userinfo	Credentials in HTTP userinfo — remove the entry and rotate the password
+cli_flag_secret	Password or secret passed as a CLI flag — remove the entry and rotate the credential
+inline_assign	Secret in a shell assignment — remove the entry and rotate the credential
+config_check	Pattern match from local rules — remove the entry and rotate the credential
