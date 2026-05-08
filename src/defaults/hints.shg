@@ -11,6 +11,7 @@ prefix:sk-ant-api03	Anthropic API key — rotate at console.anthropic.com/settin
 prefix:sk-ant-	Anthropic API key — rotate at console.anthropic.com/settings/keys
 prefix:sk-proj-	OpenAI project key — rotate at platform.openai.com/api-keys
 prefix:sk-	OpenAI API key — rotate at platform.openai.com/api-keys
+prefix:github_pat_	GitHub fine-grained personal access token — rotate at github.com/settings/tokens
 prefix:ghp_	GitHub personal access token — rotate at github.com/settings/tokens
 prefix:ghs_	GitHub App installation token — rotate at github.com/settings/installations
 prefix:gho_	GitHub OAuth token — rotate at github.com/settings/applications
