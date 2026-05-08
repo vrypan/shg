@@ -19,15 +19,31 @@ pub fn main(init: std.process.Init) !void {
     if (raw_args.len < 2 or std.mem.eql(u8, raw_args[1], "help") or
         std.mem.eql(u8, raw_args[1], "--help") or std.mem.eql(u8, raw_args[1], "-h"))
     {
-        try stdout.interface.writeAll("Usage: shg-config compile\n");
+        try stdout.interface.writeAll(
+            \\Usage:
+            \\  shg-config compile
+            \\  shg-config defaults [-y]
+            \\
+        );
         return;
     }
 
-    if (!std.mem.eql(u8, raw_args[1], "compile") or raw_args.len != 2) {
-        try stderr.interface.writeAll("error: expected command 'compile'\n\nUsage: shg-config compile\n");
+    const command = raw_args[1];
+    if (!std.mem.eql(u8, command, "compile") and !std.mem.eql(u8, command, "defaults")) {
+        try stderr.interface.writeAll("error: expected command 'compile' or 'defaults'\n");
         try stderr.flush();
         std.process.exit(2);
     }
+    const force_yes = if (std.mem.eql(u8, command, "defaults"))
+        try parseDefaultsArgs(raw_args[2..], &stderr)
+    else blk: {
+        if (raw_args.len != 2) {
+            try stderr.interface.writeAll("error: compile takes no options\n");
+            try stderr.flush();
+            std.process.exit(2);
+        }
+        break :blk false;
+    };
 
     const dir = (try config.configDir(alloc, init.environ_map)) orelse {
         try stderr.interface.writeAll("error: cannot determine config directory; set XDG_CONFIG_HOME or HOME\n");
@@ -43,6 +59,17 @@ pub fn main(init: std.process.Init) !void {
     const ignore_default_path = (try config.ignoreDefaultFile(alloc, init.environ_map)).?;
     const match_default_path = (try config.matchDefaultFile(alloc, init.environ_map)).?;
     const paths_default_path = (try config.pathsDefaultFile(alloc, init.environ_map)).?;
+    const default_files = [_]DefaultFile{
+        .{ .path = ignore_default_path, .bytes = default_ignore_rules },
+        .{ .path = match_default_path, .bytes = default_match_rules },
+        .{ .path = paths_default_path, .bytes = default_paths_rules },
+    };
+
+    if (std.mem.eql(u8, command, "defaults")) {
+        try writeDefaults(io, &stdout, default_files[0..], force_yes, true);
+        return;
+    }
+
     const compiled_path = (try config.compiledFile(alloc, init.environ_map)).?;
 
     var ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg");
@@ -73,68 +100,41 @@ pub fn main(init: std.process.Init) !void {
     try stdout.interface.print("compiled rules: {s}\n", .{compiled_path});
 }
 
-const default_ignore_rules =
-    \\# shg ignore rules
-    \\# Lines are substring matches by default. Use exact:, prefix:, or substr:.
-    \\prefix:SSH_AUTH_SOCK=
-    \\prefix:STARSHIP_SESSION_KEY=
-    \\prefix:GPG_AGENT_INFO=
-    \\prefix:DBUS_SESSION_BUS_ADDRESS=
-    \\prefix:PWD=
-    \\prefix:OLDPWD=
-    \\prefix:OLD_PWD=
-    \\
-;
+const default_ignore_rules = @embedFile("defaults/ignore.default.shg");
+const default_match_rules = @embedFile("defaults/match.default.shg");
+const default_paths_rules = @embedFile("defaults/paths.default.shg");
 
-const default_match_rules =
-    \\# shg match rules
-    \\# Lines are substring matches by default. Use exact:, prefix:, or substr:.
-    \\sk-ant-
-    \\sk-
-    \\github_pat_
-    \\ghp_
-    \\gho_
-    \\ghu_
-    \\ghs_
-    \\ghr_
-    \\xoxb-
-    \\xoxp-
-    \\xapp-
-    \\xwfp-
-    \\AKIA
-    \\ASIA
-    \\sk_live_
-    \\sk_test_
-    \\rk_live_
-    \\rk_test_
-    \\whsec_
-    \\sk_org_
-    \\-----BEGIN PRIVATE KEY-----
-    \\-----BEGIN ENCRYPTED PRIVATE KEY-----
-    \\-----BEGIN OPENSSH PRIVATE KEY-----
-    \\-----BEGIN EC PRIVATE KEY-----
-    \\-----BEGIN RSA PRIVATE KEY-----
-    \\-----BEGIN DSA PRIVATE KEY-----
-    \\-----BEGIN PGP PRIVATE KEY BLOCK-----
-    \\AGE-SECRET-KEY-1
-    \\ssh-rsa AAAA
-    \\
-;
+const DefaultFile = struct {
+    path: []const u8,
+    bytes: []const u8,
+};
 
-const default_paths_rules =
-    \\# shg history paths
-    \\# One path per line. A leading ~/ expands to your home directory.
-    \\~/.zsh_history
-    \\~/.bash_history
-    \\~/.local/share/fish/fish_history
-    \\~/.config/fish/fish_history
-    \\~/.python_history
-    \\~/.psql_history
-    \\~/.mysql_history
-    \\~/.sqlite_history
-    \\~/.rediscli_history
-    \\
-;
+fn parseDefaultsArgs(args: []const []const u8, stderr: *Io.File.Writer) !bool {
+    if (args.len == 0) return false;
+    if (args.len == 1 and std.mem.eql(u8, args[0], "-y")) return true;
+    try stderr.interface.writeAll("error: expected defaults option '-y'\n");
+    try stderr.flush();
+    std.process.exit(2);
+}
+
+fn writeDefaults(io: Io, stdout: *Io.File.Writer, files: []const DefaultFile, force_yes: bool, prompt_existing: bool) !void {
+    for (files) |file| {
+        if (fileExists(io, file.path) and !force_yes) {
+            if (prompt_existing) {
+                try stdout.interface.print("{s} exists. Overwrite? [yes/no] ", .{file.path});
+                try stdout.flush();
+                if (!try promptYes(io)) {
+                    try stdout.interface.print("kept {s}\n", .{file.path});
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        }
+        try writeFile(io, file.path, file.bytes);
+        try stdout.interface.print("wrote {s}\n", .{file.path});
+    }
+}
 
 fn promptYes(io: Io) !bool {
     var stdin_buf: [128]u8 = undefined;

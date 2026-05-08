@@ -1,0 +1,9 @@
+# shg ignore rules
+# Lines are substring matches by default. Use exact:, prefix:, or substr:.
+prefix:SSH_AUTH_SOCK=
+prefix:STARSHIP_SESSION_KEY=
+prefix:GPG_AGENT_INFO=
+prefix:DBUS_SESSION_BUS_ADDRESS=
+prefix:PWD=
+prefix:OLDPWD=
+prefix:OLD_PWD=

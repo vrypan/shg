@@ -1,0 +1,11 @@
+# shg history paths
+# One path per line. A leading ~/ expands to your home directory.
+~/.zsh_history
+~/.bash_history
+~/.local/share/fish/fish_history
+~/.config/fish/fish_history
+~/.python_history
+~/.psql_history
+~/.mysql_history
+~/.sqlite_history
+~/.rediscli_history

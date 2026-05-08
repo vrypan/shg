@@ -124,7 +124,7 @@ $ shg patterns
 
 ### Default history paths
 
-The default `paths.default.shg` created by `shg-config compile` includes:
+The default `paths.default.shg` created by `shg-config defaults` includes:
 
 | Shell / tool | Path |
 |---|---|
@@ -186,11 +186,27 @@ The config directory contains editable `.shg` files:
 - `match.*.shg` for additional patterns that should be scanned
 - `paths.*.shg` for default history paths to scan when `--path` is not used
 
+Default config templates are maintained as plain text files in `src/defaults/`
+and embedded into `shg-config` at build time.
+
+Put local changes in separate files such as `ignore.my.shg`, `match.work.shg`,
+or `paths.local.shg`. Avoid editing `*.default.shg` directly; future default
+updates may overwrite those files.
+
 Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
 `shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
 without a prefix are substring matches. `paths.*.shg` files are one path per
 line, and a leading `~/` expands to the user's home directory.
+
+Ignore rules take precedence over match rules. If the same text appears in both
+`match.default.shg` and `ignore.my.shg`, the matching command is suppressed and
+does not produce a finding.
+
+Run `shg-config defaults` to write the three default `.shg` files. Existing
+files prompt before overwrite; answer `yes` to replace or `no` to keep that
+file and continue. Use `shg-config defaults -y` to overwrite defaults without
+prompting.
 
 ## Security
 
