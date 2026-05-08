@@ -33,12 +33,12 @@ say "TEST create default compiled config rules"
 run_capture sh -c 'printf "y\n" | env XDG_CONFIG_HOME="$1" "$2" compile' sh "$xdg" "$shg_config"
 test "$status" -eq 0
 test -s "$xdg/shg/rules.bin"
-test -s "$xdg/shg/ignore.rules"
-test -s "$xdg/shg/check.rules"
-test -s "$xdg/shg/paths.rules"
-grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.rules"
-grep -q 'ghp_' "$xdg/shg/check.rules"
-grep -q '~/.zsh_history' "$xdg/shg/paths.rules"
+test -s "$xdg/shg/ignore.default.shg"
+test -s "$xdg/shg/match.default.shg"
+test -s "$xdg/shg/paths.default.shg"
+grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.default.shg"
+grep -q 'ghp_' "$xdg/shg/match.default.shg"
+grep -q '~/.zsh_history' "$xdg/shg/paths.default.shg"
 say "PASS create default compiled config rules"
 
 say "TEST configured history paths"
@@ -100,18 +100,21 @@ printf '%s\n' "$output" | grep -q 'No findings detected.'
 say "PASS skip known non-secret environment variables"
 
 say "TEST compiled config rules"
-printf '%s\n' 'IGNORED_TOKEN=' >> "$xdg/shg/ignore.rules"
-printf '%s\n' 'custom-secret-pattern' >> "$xdg/shg/check.rules"
+printf '%s\n' 'IGNORED_TOKEN=' > "$xdg/shg/ignore.local.shg"
+printf '%s\n' 'custom-secret-pattern' > "$xdg/shg/match.local.shg"
+printf '%s\n' 'extra-secret-pattern' > "$xdg/shg/match.extra.shg"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
 test "$status" -eq 0
 run_capture env -i XDG_CONFIG_HOME="$xdg" \
     IGNORED_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 \
     CUSTOM_VALUE=custom-secret-pattern \
+    EXTRA_VALUE=extra-secret-pattern \
     "$shg" scan --hist false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q 'type:    config_check'
+printf '%s\n' "$output" | grep -q 'EXTRA_VALUE'
 if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; then
-    printf '%s\n' "ignore.rules did not suppress ignored token" >&2
+    printf '%s\n' "ignore.*.shg did not suppress ignored token" >&2
     exit 1
 fi
 say "PASS compiled config rules"

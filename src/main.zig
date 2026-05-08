@@ -273,7 +273,7 @@ fn printPatterns(w: *Io.File.Writer) !void {
         \\  inline_assign     VAR=value with sensitive keywords
         \\  auth_header       Authorization: Bearer <token>, --password <val>
         \\  credential_url    scheme://user:pass@host
-        \\  config_check      compiled check.rules pattern match
+        \\  config_check      compiled match.*.shg pattern match
         \\  private_key       -----BEGIN * KEY----- markers
         \\  age_secret_key    AGE-SECRET-KEY-1... markers
         \\  ssh_key           ssh-rsa AAAA... public keys
@@ -410,7 +410,7 @@ test "compiled ignore rules suppress environment assignments" {
     try std.testing.expectEqual(@as(usize, 1), visible);
 }
 
-test "compiled check rules redact full token-like match" {
+test "compiled match rules redact full token-like match" {
     const alloc = std.testing.allocator;
     const cache_bytes = try rules.compile(alloc, "", "ghp_", "");
     defer alloc.free(cache_bytes);

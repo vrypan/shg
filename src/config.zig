@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const ignore_filename = "ignore.rules";
-pub const check_filename = "check.rules";
-pub const paths_filename = "paths.rules";
+pub const ignore_default_filename = "ignore.default.shg";
+pub const match_default_filename = "match.default.shg";
+pub const paths_default_filename = "paths.default.shg";
 pub const compiled_filename = "rules.bin";
 
 pub fn configDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
@@ -15,16 +15,16 @@ pub fn configDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.M
     return try std.fs.path.join(alloc, &.{ home, ".config", "shg" });
 }
 
-pub fn ignoreFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
-    return configFile(alloc, environ, ignore_filename);
+pub fn ignoreDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    return configFile(alloc, environ, ignore_default_filename);
 }
 
-pub fn checkFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
-    return configFile(alloc, environ, check_filename);
+pub fn matchDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    return configFile(alloc, environ, match_default_filename);
 }
 
-pub fn pathsFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
-    return configFile(alloc, environ, paths_filename);
+pub fn pathsDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    return configFile(alloc, environ, paths_default_filename);
 }
 
 pub fn compiledFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
@@ -86,19 +86,19 @@ test "config files are under config dir" {
     defer env.deinit();
     try env.put("XDG_CONFIG_HOME", "/tmp/xdg");
 
-    const ignore = (try ignoreFile(alloc, &env)).?;
+    const ignore = (try ignoreDefaultFile(alloc, &env)).?;
     defer alloc.free(ignore);
-    const check = (try checkFile(alloc, &env)).?;
-    defer alloc.free(check);
-    const paths = (try pathsFile(alloc, &env)).?;
+    const match = (try matchDefaultFile(alloc, &env)).?;
+    defer alloc.free(match);
+    const paths = (try pathsDefaultFile(alloc, &env)).?;
     defer alloc.free(paths);
 
     const compiled = (try compiledFile(alloc, &env)).?;
     defer alloc.free(compiled);
 
-    try std.testing.expectEqualStrings("/tmp/xdg/shg/ignore.rules", ignore);
-    try std.testing.expectEqualStrings("/tmp/xdg/shg/check.rules", check);
-    try std.testing.expectEqualStrings("/tmp/xdg/shg/paths.rules", paths);
+    try std.testing.expectEqualStrings("/tmp/xdg/shg/ignore.default.shg", ignore);
+    try std.testing.expectEqualStrings("/tmp/xdg/shg/match.default.shg", match);
+    try std.testing.expectEqualStrings("/tmp/xdg/shg/paths.default.shg", paths);
     try std.testing.expectEqualStrings("/tmp/xdg/shg/rules.bin", compiled);
 }
 
@@ -107,8 +107,8 @@ test "config files are absent without config roots" {
     var env = std.process.Environ.Map.init(alloc);
     defer env.deinit();
 
-    try std.testing.expect((try ignoreFile(alloc, &env)) == null);
-    try std.testing.expect((try checkFile(alloc, &env)) == null);
-    try std.testing.expect((try pathsFile(alloc, &env)) == null);
+    try std.testing.expect((try ignoreDefaultFile(alloc, &env)) == null);
+    try std.testing.expect((try matchDefaultFile(alloc, &env)) == null);
+    try std.testing.expect((try pathsDefaultFile(alloc, &env)) == null);
     try std.testing.expect((try compiledFile(alloc, &env)) == null);
 }

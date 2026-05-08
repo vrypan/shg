@@ -40,19 +40,26 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     };
 
-    const ignore_path = (try config.ignoreFile(alloc, init.environ_map)).?;
-    const check_path = (try config.checkFile(alloc, init.environ_map)).?;
-    const paths_path = (try config.pathsFile(alloc, init.environ_map)).?;
+    const ignore_default_path = (try config.ignoreDefaultFile(alloc, init.environ_map)).?;
+    const match_default_path = (try config.matchDefaultFile(alloc, init.environ_map)).?;
+    const paths_default_path = (try config.pathsDefaultFile(alloc, init.environ_map)).?;
     const compiled_path = (try config.compiledFile(alloc, init.environ_map)).?;
 
-    if (!fileExists(io, ignore_path) or !fileExists(io, check_path) or !fileExists(io, paths_path)) {
-        try stdout.interface.print("Config files are missing in {s}. Create default ignore.rules, check.rules, and paths.rules? [y/N] ", .{dir});
+    var ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg");
+    var match_group = try readConfigGroup(io, alloc, dir, "match.", ".shg");
+    var paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg");
+
+    if (ignore_group.count == 0 or match_group.count == 0 or paths_group.count == 0) {
+        try stdout.interface.print("Config files are missing in {s}. Create default ignore.default.shg, match.default.shg, and paths.default.shg? [y/N] ", .{dir});
         try stdout.flush();
         if (try promptYes(io)) {
-            if (!fileExists(io, ignore_path)) try writeFile(io, ignore_path, default_ignore_rules);
-            if (!fileExists(io, check_path)) try writeFile(io, check_path, default_check_rules);
-            if (!fileExists(io, paths_path)) try writeFile(io, paths_path, default_paths_rules);
+            if (ignore_group.count == 0 and !fileExists(io, ignore_default_path)) try writeFile(io, ignore_default_path, default_ignore_rules);
+            if (match_group.count == 0 and !fileExists(io, match_default_path)) try writeFile(io, match_default_path, default_match_rules);
+            if (paths_group.count == 0 and !fileExists(io, paths_default_path)) try writeFile(io, paths_default_path, default_paths_rules);
             try stdout.interface.writeAll("created default config files\n");
+            ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg");
+            match_group = try readConfigGroup(io, alloc, dir, "match.", ".shg");
+            paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg");
         } else {
             try stderr.interface.writeAll("error: config files are missing; create them or rerun and answer yes\n");
             try stderr.flush();
@@ -60,10 +67,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    const ignore_text = try readOptionalFile(io, alloc, ignore_path);
-    const check_text = try readOptionalFile(io, alloc, check_path);
-    const paths_text = try readOptionalFile(io, alloc, paths_path);
-    const compiled = try rules.compile(alloc, ignore_text, check_text, paths_text);
+    const compiled = try rules.compile(alloc, ignore_group.text, match_group.text, paths_group.text);
     try writeFile(io, compiled_path, compiled);
 
     try stdout.interface.print("compiled rules: {s}\n", .{compiled_path});
@@ -82,8 +86,8 @@ const default_ignore_rules =
     \\
 ;
 
-const default_check_rules =
-    \\# shg check rules
+const default_match_rules =
+    \\# shg match rules
     \\# Lines are substring matches by default. Use exact:, prefix:, or substr:.
     \\sk-ant-
     \\sk-
@@ -149,11 +153,49 @@ fn fileExists(io: Io, path: []const u8) bool {
     return true;
 }
 
-fn readOptionalFile(io: Io, alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
-    const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return "",
-        else => return err,
-    };
+const ConfigGroup = struct {
+    text: []const u8,
+    count: usize,
+};
+
+fn readConfigGroup(io: Io, alloc: std.mem.Allocator, dir_path: []const u8, prefix: []const u8, suffix: []const u8) !ConfigGroup {
+    var dir = try Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
+
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |name| alloc.free(name);
+        names.deinit(alloc);
+    }
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file and entry.kind != .unknown) continue;
+        if (!std.mem.startsWith(u8, entry.name, prefix)) continue;
+        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
+        try names.append(alloc, try alloc.dupe(u8, entry.name));
+    }
+
+    std.mem.sort([]const u8, names.items, {}, lessThanString);
+
+    var out: std.ArrayList(u8) = .empty;
+    for (names.items) |name| {
+        const path = try std.fs.path.join(alloc, &.{ dir_path, name });
+        defer alloc.free(path);
+        const text = try readFile(io, alloc, path);
+        defer alloc.free(text);
+        try out.appendSlice(alloc, text);
+        if (text.len > 0 and text[text.len - 1] != '\n') try out.append(alloc, '\n');
+    }
+    return .{ .text = try out.toOwnedSlice(alloc), .count = names.items.len };
+}
+
+fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+fn readFile(io: Io, alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const file = try Io.Dir.openFileAbsolute(io, path, .{});
     defer file.close(io);
     const stat = try file.stat(io);
     var read_buf: [8192]u8 = undefined;

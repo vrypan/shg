@@ -116,7 +116,7 @@ $ shg patterns
   inline_assign     VAR=value with sensitive keywords
   auth_header       Authorization: Bearer <token>, --password <val>
   credential_url    scheme://user:pass@host
-  config_check      compiled check.rules pattern match
+  config_check      compiled match.*.shg pattern match
   private_key       -----BEGIN * KEY----- markers
   age_secret_key    AGE-SECRET-KEY-1... markers
   ssh_key           ssh-rsa AAAA... public keys
@@ -124,7 +124,7 @@ $ shg patterns
 
 ### Default history paths
 
-The default `paths.rules` created by `shg-config compile` includes:
+The default `paths.default.shg` created by `shg-config compile` includes:
 
 | Shell / tool | Path |
 |---|---|
@@ -180,17 +180,17 @@ Configuration files live in `shg`'s config directory:
 - `$XDG_CONFIG_HOME/shg` when `XDG_CONFIG_HOME` is set
 - `$HOME/.config/shg` otherwise
 
-The config directory contains three editable files:
+The config directory contains editable `.shg` files:
 
-- `ignore.rules` for patterns that should suppress findings
-- `check.rules` for additional patterns that should be scanned
-- `paths.rules` for default history paths to scan when `--path` is not used
+- `ignore.*.shg` for patterns that should suppress findings
+- `match.*.shg` for additional patterns that should be scanned
+- `paths.*.shg` for default history paths to scan when `--path` is not used
 
 Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
 `shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
-without a prefix are substring matches. `paths.rules` is one path per line, and
-a leading `~/` expands to the user's home directory.
+without a prefix are substring matches. `paths.*.shg` files are one path per
+line, and a leading `~/` expands to the user's home directory.
 
 ## Security
 
