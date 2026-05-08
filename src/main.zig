@@ -69,7 +69,7 @@ pub fn main(init: std.process.Init) !void {
         const paths: []const []const u8 = if (args.paths.len > 0)
             args.paths
         else
-            try sources.discover(io, arena_alloc, init.environ_map);
+            try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
 
         for (paths) |path| {
             const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
@@ -384,6 +384,7 @@ test "compiled ignore rules suppress environment assignments" {
         \\prefix:OLD_PWD=
     ,
         "",
+        "",
     );
     defer alloc.free(cache_bytes);
     const cache = try rules.Cache.init(cache_bytes);
@@ -411,7 +412,7 @@ test "compiled ignore rules suppress environment assignments" {
 
 test "compiled check rules redact full token-like match" {
     const alloc = std.testing.allocator;
-    const cache_bytes = try rules.compile(alloc, "", "ghp_");
+    const cache_bytes = try rules.compile(alloc, "", "ghp_", "");
     defer alloc.free(cache_bytes);
     const cache = try rules.Cache.init(cache_bytes);
     const e = Entry{

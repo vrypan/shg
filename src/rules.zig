@@ -8,6 +8,7 @@ const record_len: usize = 12;
 pub const RuleKind = enum(u8) {
     ignore = 1,
     check = 2,
+    path = 3,
 };
 
 pub const MatchKind = enum(u8) {
@@ -82,11 +83,12 @@ pub fn matches(rule: Rule, text: []const u8) bool {
     };
 }
 
-pub fn compile(alloc: std.mem.Allocator, ignore_text: []const u8, check_text: []const u8) ![]u8 {
+pub fn compile(alloc: std.mem.Allocator, ignore_text: []const u8, check_text: []const u8, paths_text: []const u8) ![]u8 {
     var parsed: std.ArrayList(Rule) = .empty;
     defer parsed.deinit(alloc);
     try appendRules(alloc, &parsed, .ignore, ignore_text);
     try appendRules(alloc, &parsed, .check, check_text);
+    try appendPaths(alloc, &parsed, paths_text);
 
     var blob: std.ArrayList(u8) = .empty;
     defer blob.deinit(alloc);
@@ -121,6 +123,15 @@ fn appendRules(alloc: std.mem.Allocator, rules: *std.ArrayList(Rule), kind: Rule
         if (line.len == 0 or line[0] == '#') continue;
         const parsed = parseLine(kind, line) orelse continue;
         try rules.append(alloc, parsed);
+    }
+}
+
+fn appendPaths(alloc: std.mem.Allocator, rules: *std.ArrayList(Rule), text: []const u8) !void {
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r\n");
+        if (line.len == 0 or line[0] == '#') continue;
+        try rules.append(alloc, .{ .kind = .path, .match_kind = .exact, .pattern = line });
     }
 }
 
@@ -184,13 +195,16 @@ test "compile and read rules cache" {
     ,
         \\substr:ghp_
         \\custom-secret
+    ,
+        \\~/.zsh_history
     );
     defer alloc.free(bytes);
     const cache = try Cache.init(bytes);
-    try std.testing.expectEqual(@as(usize, 4), cache.ruleCount());
+    try std.testing.expectEqual(@as(usize, 5), cache.ruleCount());
     try std.testing.expect(try cache.matchesAny(.ignore, "SAFE_TOKEN"));
     try std.testing.expect(try cache.matchesAny(.ignore, "TMP_VALUE"));
     try std.testing.expect(try cache.matchesAny(.check, "token=ghp_abc"));
     try std.testing.expect(try cache.matchesAny(.check, "has custom-secret inside"));
+    try std.testing.expectEqualStrings("~/.zsh_history", (try cache.rule(4)).pattern);
     try std.testing.expect(!try cache.matchesAny(.ignore, "other"));
 }

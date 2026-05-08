@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const ignore_filename = "ignore.rules";
 pub const check_filename = "check.rules";
+pub const paths_filename = "paths.rules";
 pub const compiled_filename = "rules.bin";
 
 pub fn configDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
@@ -20,6 +21,10 @@ pub fn ignoreFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.
 
 pub fn checkFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
     return configFile(alloc, environ, check_filename);
+}
+
+pub fn pathsFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    return configFile(alloc, environ, paths_filename);
 }
 
 pub fn compiledFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
@@ -85,12 +90,15 @@ test "config files are under config dir" {
     defer alloc.free(ignore);
     const check = (try checkFile(alloc, &env)).?;
     defer alloc.free(check);
+    const paths = (try pathsFile(alloc, &env)).?;
+    defer alloc.free(paths);
 
     const compiled = (try compiledFile(alloc, &env)).?;
     defer alloc.free(compiled);
 
     try std.testing.expectEqualStrings("/tmp/xdg/shg/ignore.rules", ignore);
     try std.testing.expectEqualStrings("/tmp/xdg/shg/check.rules", check);
+    try std.testing.expectEqualStrings("/tmp/xdg/shg/paths.rules", paths);
     try std.testing.expectEqualStrings("/tmp/xdg/shg/rules.bin", compiled);
 }
 
@@ -101,5 +109,6 @@ test "config files are absent without config roots" {
 
     try std.testing.expect((try ignoreFile(alloc, &env)) == null);
     try std.testing.expect((try checkFile(alloc, &env)) == null);
+    try std.testing.expect((try pathsFile(alloc, &env)) == null);
     try std.testing.expect((try compiledFile(alloc, &env)) == null);
 }

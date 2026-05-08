@@ -122,15 +122,16 @@ $ shg patterns
   ssh_key           ssh-rsa AAAA... public keys
 ```
 
-### Supported history files
+### Default history paths
 
-Auto-detected when present:
+The default `paths.rules` created by `shg-config compile` includes:
 
 | Shell / tool | Path |
 |---|---|
 | Zsh | `~/.zsh_history` |
 | Bash | `~/.bash_history` |
 | Fish | `~/.local/share/fish/fish_history` |
+| Fish | `~/.config/fish/fish_history` |
 | Python REPL | `~/.python_history` |
 | psql | `~/.psql_history` |
 | MySQL | `~/.mysql_history` |
@@ -159,7 +160,6 @@ Each detection candidate is scored against a set of signals:
 | Token length ≥ 20 chars | +2 |
 | Authorization header | +2 |
 | Credential URL | +2 |
-| Known provider format | +4 |
 | Private key marker | +6 |
 | Placeholder / test value | −3 |
 | Search command (grep, echo, …) | −2 |
@@ -180,15 +180,17 @@ Configuration files live in `shg`'s config directory:
 - `$XDG_CONFIG_HOME/shg` when `XDG_CONFIG_HOME` is set
 - `$HOME/.config/shg` otherwise
 
-The config directory contains two pattern files:
+The config directory contains three editable files:
 
 - `ignore.rules` for patterns that should suppress findings
 - `check.rules` for additional patterns that should be scanned
+- `paths.rules` for default history paths to scan when `--path` is not used
 
 Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
 `shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
-without a prefix are substring matches.
+without a prefix are substring matches. `paths.rules` is one path per line, and
+a leading `~/` expands to the user's home directory.
 
 ## Security
 

@@ -35,9 +35,21 @@ test "$status" -eq 0
 test -s "$xdg/shg/rules.bin"
 test -s "$xdg/shg/ignore.rules"
 test -s "$xdg/shg/check.rules"
+test -s "$xdg/shg/paths.rules"
 grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.rules"
 grep -q 'ghp_' "$xdg/shg/check.rules"
+grep -q '~/.zsh_history' "$xdg/shg/paths.rules"
 say "PASS create default compiled config rules"
+
+say "TEST configured history paths"
+home=$tmp/home
+mkdir -p "$home"
+printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$home/.zsh_history"
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" "$shg" scan --env false
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$home/.zsh_history"
+printf '%s\n' "$output" | grep -q 'type:    config_check'
+say "PASS configured history paths"
 
 say "TEST scan true-positive corpus"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp"

@@ -42,17 +42,19 @@ pub fn main(init: std.process.Init) !void {
 
     const ignore_path = (try config.ignoreFile(alloc, init.environ_map)).?;
     const check_path = (try config.checkFile(alloc, init.environ_map)).?;
+    const paths_path = (try config.pathsFile(alloc, init.environ_map)).?;
     const compiled_path = (try config.compiledFile(alloc, init.environ_map)).?;
 
-    if (!fileExists(io, ignore_path) or !fileExists(io, check_path)) {
-        try stdout.interface.print("Rule files are missing in {s}. Create default ignore.rules and check.rules? [y/N] ", .{dir});
+    if (!fileExists(io, ignore_path) or !fileExists(io, check_path) or !fileExists(io, paths_path)) {
+        try stdout.interface.print("Config files are missing in {s}. Create default ignore.rules, check.rules, and paths.rules? [y/N] ", .{dir});
         try stdout.flush();
         if (try promptYes(io)) {
             if (!fileExists(io, ignore_path)) try writeFile(io, ignore_path, default_ignore_rules);
             if (!fileExists(io, check_path)) try writeFile(io, check_path, default_check_rules);
-            try stdout.interface.writeAll("created default rule files\n");
+            if (!fileExists(io, paths_path)) try writeFile(io, paths_path, default_paths_rules);
+            try stdout.interface.writeAll("created default config files\n");
         } else {
-            try stderr.interface.writeAll("error: rule files are missing; create them or rerun and answer yes\n");
+            try stderr.interface.writeAll("error: config files are missing; create them or rerun and answer yes\n");
             try stderr.flush();
             std.process.exit(2);
         }
@@ -60,7 +62,8 @@ pub fn main(init: std.process.Init) !void {
 
     const ignore_text = try readOptionalFile(io, alloc, ignore_path);
     const check_text = try readOptionalFile(io, alloc, check_path);
-    const compiled = try rules.compile(alloc, ignore_text, check_text);
+    const paths_text = try readOptionalFile(io, alloc, paths_path);
+    const compiled = try rules.compile(alloc, ignore_text, check_text, paths_text);
     try writeFile(io, compiled_path, compiled);
 
     try stdout.interface.print("compiled rules: {s}\n", .{compiled_path});
@@ -111,6 +114,21 @@ const default_check_rules =
     \\-----BEGIN PGP PRIVATE KEY BLOCK-----
     \\AGE-SECRET-KEY-1
     \\ssh-rsa AAAA
+    \\
+;
+
+const default_paths_rules =
+    \\# shg history paths
+    \\# One path per line. A leading ~/ expands to your home directory.
+    \\~/.zsh_history
+    \\~/.bash_history
+    \\~/.local/share/fish/fish_history
+    \\~/.config/fish/fish_history
+    \\~/.python_history
+    \\~/.psql_history
+    \\~/.mysql_history
+    \\~/.sqlite_history
+    \\~/.rediscli_history
     \\
 ;
 
