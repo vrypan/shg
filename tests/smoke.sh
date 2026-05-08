@@ -67,8 +67,23 @@ printf '%s\n' "$output" | grep -q "$home/.zsh_history"
 printf '%s\n' "$output" | grep -q 'type:    config_check'
 say "PASS configured history paths"
 
+say "TEST environment history path"
+histfile=$tmp/custom_history
+printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$histfile"
+run_capture env XDG_CONFIG_HOME="$xdg" HISTFILE="$histfile" "$shg" scan --env false
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$histfile"
+printf '%s\n' "$output" | grep -q 'type:    config_check'
+say "PASS environment history path"
+
+say "TEST zsh history flush warning"
+run_capture env XDG_CONFIG_HOME="$xdg" SHELL=/bin/zsh "$shg" scan --env false
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "zsh may keep recent history in memory"
+say "PASS zsh history flush warning"
+
 say "TEST scan true-positive corpus"
-run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp" --min-severity low
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '5 finding(s) detected (3 high, 2 medium, 0 low).'
 printf '%s\n' "$output" | grep -q 'type:    credential_url'
@@ -78,11 +93,11 @@ if printf '%s\n' "$output" | grep -q "$full_secret"; then
 fi
 say "PASS scan true-positive corpus"
 
-say "TEST scan true-positive corpus with --show-full"
-run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --show-full --path "$tp"
+say "TEST scan true-positive corpus with --redacted=false"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --redacted=false --path "$tp" --min-severity low
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$full_secret"
-say "PASS scan true-positive corpus with --show-full"
+say "PASS scan true-positive corpus with --redacted=false"
 
 say "TEST scan false-positive corpus"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$fp"

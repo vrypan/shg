@@ -23,14 +23,9 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
     var results: std.ArrayList(Candidate) = .empty;
     const cmd = e.command;
 
-    const stripped = stripLeadingKeyword(cmd);
-    const eq = std.mem.indexOfScalar(u8, stripped, '=') orelse return results.toOwnedSlice(alloc);
-    const var_name = stripped[0..eq];
-    const value_raw = stripped[eq + 1 ..];
-    if (value_raw.len == 0) return results.toOwnedSlice(alloc);
-    if (std.mem.indexOfScalar(u8, var_name, ' ') != null) return results.toOwnedSlice(alloc);
+    const assignment = findAssignment(cmd) orelse return results.toOwnedSlice(alloc);
 
-    const var_lower = try std.ascii.allocLowerString(alloc, var_name);
+    const var_lower = try std.ascii.allocLowerString(alloc, assignment.name);
     defer alloc.free(var_lower);
 
     var keyword_match = false;
@@ -39,7 +34,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
     }
     if (!keyword_match) return results.toOwnedSlice(alloc);
 
-    const token = stripQuotes(value_raw);
+    const token = stripQuotes(assignment.value);
 
     const is_search = blk: {
         for (search_commands) |sc| { if (std.mem.startsWith(u8, cmd, sc)) break :blk true; }
@@ -66,6 +61,59 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
         },
     });
     return results.toOwnedSlice(alloc);
+}
+
+const Assignment = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+fn findAssignment(cmd: []const u8) ?Assignment {
+    const stripped = stripLeadingKeyword(cmd);
+    var search_start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, stripped, search_start, '=')) |eq| {
+        const name = assignmentName(stripped, eq) orelse {
+            search_start = eq + 1;
+            continue;
+        };
+        const value = assignmentValue(stripped, eq + 1) orelse {
+            search_start = eq + 1;
+            continue;
+        };
+        return .{ .name = name, .value = value };
+    }
+    return null;
+}
+
+fn assignmentName(s: []const u8, eq: usize) ?[]const u8 {
+    var start = eq;
+    while (start > 0 and isNameChar(s[start - 1])) start -= 1;
+    if (start == eq) return null;
+    if (start > 0 and !isBoundary(s[start - 1])) return null;
+    return s[start..eq];
+}
+
+fn assignmentValue(s: []const u8, start: usize) ?[]const u8 {
+    if (start >= s.len) return null;
+    if (s[start] == '"' or s[start] == '\'') {
+        const quote = s[start];
+        var end = start + 1;
+        while (end < s.len and s[end] != quote) end += 1;
+        return s[start..end];
+    }
+
+    var end = start;
+    while (end < s.len and !std.ascii.isWhitespace(s[end]) and s[end] != '"' and s[end] != '\'') end += 1;
+    if (end == start) return null;
+    return s[start..end];
+}
+
+fn isNameChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+}
+
+fn isBoundary(c: u8) bool {
+    return std.ascii.isWhitespace(c) or c == '"' or c == '\'' or c == '(' or c == '[' or c == '{';
 }
 
 fn stripLeadingKeyword(cmd: []const u8) []const u8 {
@@ -109,4 +157,14 @@ test "inline assign detects expanded sensitive keywords" {
     defer alloc.free(cs);
     try std.testing.expect(cs.len == 1);
     try std.testing.expect(cs[0].signals.has_sensitive_keyword);
+}
+
+test "inline assign detects assignment fragments" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347", .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expect(cs.len == 1);
+    try std.testing.expectEqualStrings("sdkjfhskjfhaskfhsakhfkshfkasjkb347", cs[0].token);
+    try std.testing.expect(cs[0].signals.is_search_command);
 }

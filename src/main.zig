@@ -53,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
 
     const report_opts = report.Options{
         .min_severity = args.min_severity,
-        .show_full = args.show_full,
+        .redacted = args.redacted,
     };
 
     var counts = [4]usize{ 0, 0, 0, 0 };
@@ -66,6 +66,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (args.scan_hist) {
+        if (args.paths.len == 0 and isZshSession(init.environ_map)) {
+            try stderr.interface.writeAll("shg: zsh may keep recent history in memory; run 'fc -W' before scanning. If HISTFILE is custom, pass --path \"$HISTFILE\"\n");
+            try stderr.flush();
+        }
+
         const paths: []const []const u8 = if (args.paths.len > 0)
             args.paths
         else
@@ -105,6 +110,17 @@ pub fn main(init: std.process.Init) !void {
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);
+}
+
+fn isZshSession(environ: *const std.process.Environ.Map) bool {
+    if (environ.get("ZSH_NAME")) |name| {
+        if (std.ascii.eqlIgnoreCase(name, "zsh")) return true;
+    }
+    if (environ.get("SHELL")) |shell| {
+        const base = std.fs.path.basename(shell);
+        if (std.mem.eql(u8, base, "zsh") or std.mem.eql(u8, base, "-zsh")) return true;
+    }
+    return false;
 }
 
 fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?rules.Cache {
@@ -215,27 +231,34 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
         }
     }
 
-    if (findings.items.len == 0) {
-        if (rules_cache) |cache| {
-            var i: usize = 0;
-            while (i < cache.ruleCount()) : (i += 1) {
-                const rule = try cache.rule(i);
-                if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
-                const token = configCheckToken(rule, e.command) orelse rule.pattern;
-                const redacted = try redact.redactCommand(e.command, token, alloc);
-                try findings.append(alloc, .{
-                    .entry = e,
-                    .det_type = "config_check",
-                    .severity = .high,
-                    .score = 7,
-                    .redacted_cmd = redacted,
-                    .recommendation = "Review this configured pattern match",
-                });
-            }
+    if (rules_cache) |cache| {
+        var i: usize = 0;
+        while (i < cache.ruleCount()) : (i += 1) {
+            const rule = try cache.rule(i);
+            if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
+            const token = configCheckToken(rule, e.command) orelse rule.pattern;
+            if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;
+            const redacted = try redact.redactCommand(e.command, token, alloc);
+            try findings.append(alloc, .{
+                .entry = e,
+                .det_type = "config_check",
+                .severity = .high,
+                .score = 7,
+                .redacted_cmd = redacted,
+                .recommendation = "Review this configured pattern match",
+            });
         }
     }
 
     return findings.toOwnedSlice(alloc);
+}
+
+fn hasHighSeverityToken(findings: []const Finding, tokens: []const []const u8, token: []const u8) bool {
+    for (tokens, 0..) |seen, i| {
+        if (i >= findings.len) return false;
+        if (std.mem.eql(u8, seen, token) and findings[i].severity == .high) return true;
+    }
+    return false;
 }
 
 fn configCheckToken(rule: rules.Rule, text: []const u8) ?[]const u8 {
@@ -432,6 +455,35 @@ test "compiled match rules redact full token-like match" {
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqualStrings("config_check", findings[0].det_type);
     try std.testing.expect(std.mem.indexOf(u8, findings[0].redacted_cmd, "abcdefghijklmnopqrstuvwxyz012345") == null);
+}
+
+test "compiled match rules still report when inline assignment also matches" {
+    const alloc = std.testing.allocator;
+    const cache_bytes = try rules.compile(alloc, "", "password=", "");
+    defer alloc.free(cache_bytes);
+    const cache = try rules.Cache.init(cache_bytes);
+    const e = Entry{
+        .file = "test",
+        .line = 1,
+        .timestamp = null,
+        .raw = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347",
+        .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347",
+    };
+
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+
+    var saw_inline = false;
+    var saw_config = false;
+    for (findings) |f| {
+        if (std.mem.eql(u8, f.det_type, "inline_assign")) saw_inline = true;
+        if (std.mem.eql(u8, f.det_type, "config_check")) saw_config = true;
+    }
+    try std.testing.expect(saw_inline);
+    try std.testing.expect(saw_config);
 }
 
 test "corpus true positives produce one visible finding per line" {

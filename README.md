@@ -61,15 +61,16 @@ Options:
   -p, --path <FILE>            History file to scan [repeatable]
       --env[=BOOL]             Scan environment variables [default: true]
       --hist[=BOOL]            Scan history files [default: true]
-      --min-severity <LEVEL>   low|medium|high [default: low]
+      --min-severity <LEVEL>   low|medium|high [default: high]
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
-      --show-full              Disable redaction
+      --redacted[=BOOL]        Redact secrets in output [default: true]
   -h, --help                   Print help
 ```
 
 By default, `shg scan` checks both environment variables and history files.
-With no `--path` flags, `shg` auto-detects all supported history files present
-on the system. Use `--env false` or `--hist false` to disable a source.
+With no `--path` flags, `shg` scans existing paths from `paths.*.shg` plus the
+history file named by `HISTFILE`, when set. Use `--env false` or `--hist false`
+to disable a source.
 
 **Examples:**
 
@@ -86,8 +87,24 @@ shg scan --env false --path ~/.bash_history
 # Scan multiple files
 shg scan --path ~/.zsh_history --path ~/.bash_history
 
-# Only report high-severity findings
-shg scan --min-severity high
+# Include low and medium findings
+shg scan --min-severity low
+```
+
+Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
+Also, zsh's `$HISTFILE` is often not exported to child processes, so pass it
+explicitly if you use a custom history path. Use a shell helper if you want
+scans to include the latest interactive command:
+
+```sh
+shg-scan() {
+  fc -W 2>/dev/null
+  if [ -n "$HISTFILE" ]; then
+    shg scan --path "$HISTFILE" "$@"
+  else
+    shg scan "$@"
+  fi
+}
 ```
 
 **Exit codes:**
@@ -147,7 +164,7 @@ sk-abcdefghijklmnopqrstuvwxyz  →  sk-...yz
 ```
 
 Tokens shorter than 8 characters are replaced entirely with `[REDACTED]`.
-Use `--show-full` to disable redaction (not recommended for shared output).
+Use `--redacted=false` to disable redaction (not recommended for shared output).
 
 ## Scoring
 
@@ -213,7 +230,7 @@ prompting.
 - **No network access.** `shg` never connects to the internet.
 - **No telemetry.** Nothing is collected or sent.
 - **Redaction on by default.** Secrets are never printed in full unless
-  `--show-full` is explicitly passed.
+  `--redacted=false` is explicitly passed.
 - **Read-only.** The current release only scans; it does not modify history
   files. A `fix` subcommand (with atomic writes and automatic backups) is
   planned for a future release.

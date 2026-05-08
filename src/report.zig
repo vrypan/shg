@@ -5,17 +5,17 @@ const Severity = @import("finding.zig").Severity;
 
 pub const Options = struct {
     min_severity: Severity = .low,
-    show_full: bool = false,
+    redacted: bool = true,
 };
 
 pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     if (@intFromEnum(f.severity) < @intFromEnum(opts.min_severity)) return;
     if (f.severity == .ignore) return;
-    try printHuman(w, f, opts.show_full);
+    try printHuman(w, f, opts.redacted);
 }
 
-fn printHuman(w: *Io.File.Writer, f: Finding, show_full: bool) !void {
-    const cmd = if (show_full) f.entry.command else f.redacted_cmd;
+fn printHuman(w: *Io.File.Writer, f: Finding, redacted: bool) !void {
+    const cmd = if (redacted) f.redacted_cmd else f.entry.command;
     try w.interface.print("[{s}] {s}:{d}\n", .{ f.severity.tag(), f.entry.file, f.entry.line });
     try w.interface.print("  type:    {s}\n", .{f.det_type});
     try w.interface.print("  command: {s}\n", .{cmd});

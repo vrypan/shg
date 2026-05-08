@@ -14,7 +14,7 @@ pub const Args = struct {
     scan_hist: bool,
     min_severity: Severity,
     entropy_threshold: f64,
-    show_full: bool,
+    redacted: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -27,9 +27,9 @@ const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",  .repeatable = true },
     .{ .name = "env",                              .value = .bool_optional,                  .description = "Scan environment variables", .default_value = "true" },
     .{ .name = "hist",                             .value = .bool_optional,                  .description = "Scan history files",          .default_value = "true" },
-    .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "low" },
+    .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
-    .{ .name = "show-full",                                                                  .description = "Disable redaction"                          },
+    .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
 };
 
 const scan_spec = zecli.CommandSpec{
@@ -115,7 +115,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 }
             }
 
-            const sev_str = parsed.last("min-severity") orelse "low";
+            const sev_str = parsed.last("min-severity") orelse "high";
             const min_sev = parseSeverity(sev_str) orelse {
                 try writer.print("error: invalid --min-severity value '{s}' (use low, medium, or high)\n", .{sev_str});
                 return error.ReportedCliError;
@@ -134,7 +134,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .scan_hist = zecli.parseBool(parsed.last("hist") orelse "true") catch unreachable,
                 .min_severity = min_sev,
                 .entropy_threshold = entropy_threshold,
-                .show_full = parsed.present("show-full"),
+                .redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable,
             };
         },
     }
@@ -153,9 +153,9 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .paths = &.{},
         .scan_env = true,
         .scan_hist = true,
-        .min_severity = .low,
+        .min_severity = .high,
         .entropy_threshold = 3.5,
-        .show_full = false,
+        .redacted = true,
     };
 }
 
@@ -164,12 +164,20 @@ const TestWriter = struct {
     pub fn writeAll(_: *TestWriter, _: []const u8) !void {}
 };
 
-test "scan parses show full" {
+test "scan redaction defaults to enabled" {
     const alloc = std.testing.allocator;
     var writer = TestWriter{};
-    const raw = [_][:0]const u8{ "shg", "scan", "--show-full" };
+    const raw = [_][:0]const u8{ "shg", "scan" };
     const args = try parse(&raw, &writer, alloc);
-    try std.testing.expect(args.show_full);
+    try std.testing.expect(args.redacted);
+}
+
+test "scan redaction can be disabled" {
+    const alloc = std.testing.allocator;
+    var writer = TestWriter{};
+    const raw = [_][:0]const u8{ "shg", "scan", "--redacted=false" };
+    const args = try parse(&raw, &writer, alloc);
+    try std.testing.expect(!args.redacted);
 }
 
 test "scan source flags default to enabled" {
@@ -179,6 +187,7 @@ test "scan source flags default to enabled" {
     const args = try parse(&raw, &writer, alloc);
     try std.testing.expect(args.scan_env);
     try std.testing.expect(args.scan_hist);
+    try std.testing.expect(args.min_severity == .high);
 }
 
 test "scan source flags can be disabled" {
