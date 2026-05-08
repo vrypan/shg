@@ -1,0 +1,26 @@
+name: Update Homebrew Formula
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to publish in the Homebrew tap
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish in the Homebrew tap, for example v0.1.0'
+        required: true
+        type: string
+
+jobs:
+  update-homebrew-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Update Homebrew Formula
+        run: bash .github/scripts/update-homebrew-formula.sh "${{ inputs.tag }}"
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
