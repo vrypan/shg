@@ -251,6 +251,7 @@ test {
     _ = @import("entropy.zig");
     _ = @import("redact.zig");
     _ = @import("scorer.zig");
+    _ = @import("config.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");

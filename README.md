@@ -184,6 +184,13 @@ Each detection candidate is scored against a set of signals:
 
 The entropy threshold is configurable with `--entropy-threshold`.
 
+## Configuration
+
+Configuration files live in `shg`'s config directory:
+
+- `$XDG_CONFIG_HOME/shg` when `XDG_CONFIG_HOME` is set
+- `$HOME/.config/shg` otherwise
+
 ## Security
 
 - **No network access.** `shg` never connects to the internet.
