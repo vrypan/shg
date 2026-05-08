@@ -32,7 +32,7 @@ say "PASS missing compiled rules warning"
 say "TEST create default compiled config rules"
 run_capture sh -c 'printf "y\n" | env XDG_CONFIG_HOME="$1" "$2" compile' sh "$xdg" "$shg_config"
 test "$status" -eq 0
-test -s "$xdg/shg/compiled.rules"
+test -s "$xdg/shg/rules.bin"
 test -s "$xdg/shg/ignore.rules"
 test -s "$xdg/shg/check.rules"
 grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.rules"

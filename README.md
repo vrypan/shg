@@ -185,7 +185,7 @@ The config directory contains two pattern files:
 - `ignore.rules` for patterns that should suppress findings
 - `check.rules` for additional patterns that should be scanned
 
-Run `shg-config compile` to write `compiled.rules`, the binary cache loaded by
+Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
 `shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
 without a prefix are substring matches.

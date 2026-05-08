@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const ignore_filename = "ignore.rules";
 pub const check_filename = "check.rules";
-pub const compiled_filename = "compiled.rules";
+pub const compiled_filename = "rules.bin";
 
 pub fn configDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
     if (environ.get("XDG_CONFIG_HOME")) |xdg| {
@@ -91,7 +91,7 @@ test "config files are under config dir" {
 
     try std.testing.expectEqualStrings("/tmp/xdg/shg/ignore.rules", ignore);
     try std.testing.expectEqualStrings("/tmp/xdg/shg/check.rules", check);
-    try std.testing.expectEqualStrings("/tmp/xdg/shg/compiled.rules", compiled);
+    try std.testing.expectEqualStrings("/tmp/xdg/shg/rules.bin", compiled);
 }
 
 test "config files are absent without config roots" {
