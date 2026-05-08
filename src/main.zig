@@ -55,8 +55,9 @@ pub fn main(init: std.process.Init) !void {
     const report_opts = report.Options{
         .level = args.level,
         .redacted = args.redacted,
-        .color = !args.json and try colorEnabled(io, init.environ_map),
+        .color = !args.json and !args.summary and try colorEnabled(io, init.environ_map),
         .json = args.json,
+        .summary = args.summary,
     };
 
     var counts = [4]usize{ 0, 0, 0, 0 };
@@ -71,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
     if (args.scan_hist) {
         const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
 
-        if (args.paths.len == 0 and !stdin_is_piped and isZshSession(init.environ_map)) {
+        if (!args.summary and args.paths.len == 0 and !stdin_is_piped and isZshSession(init.environ_map)) {
             try stderr.interface.writeAll("shg: zsh may keep recent history in memory; run 'fc -W' before scanning. If HISTFILE is custom, pass --path \"$HISTFILE\"\n");
             try stderr.flush();
         }
@@ -122,7 +123,11 @@ pub fn main(init: std.process.Init) !void {
         try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
-    if (!args.json) try report.printSummary(&stdout, counts);
+    if (args.summary) {
+        try stdout.interface.print("{d} {d} {d}\n", .{ counts[3], counts[2], counts[1] });
+    } else if (!args.json) {
+        try report.printSummary(&stdout, counts);
+    }
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);

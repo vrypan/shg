@@ -8,9 +8,11 @@ pub const Options = struct {
     redacted: bool = true,
     color: bool = false,
     json: bool = false,
+    summary: bool = false,
 };
 
 pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
+    if (opts.summary) return;
     if (@intFromEnum(f.severity) < @intFromEnum(opts.level)) return;
     if (f.severity == .ignore) return;
     if (opts.json) try printFindingJson(w, f, opts) else try printHuman(w, f, opts);
