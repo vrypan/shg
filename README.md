@@ -10,14 +10,14 @@ passwords, bearer tokens, credential URLs, and private keys. Secrets are
 $ shg scan
 
 [HIGH] ~/.zsh_history:148
-  type:    openai_api_key
+  type:    inline_assign
   command: export OPENAI_API_KEY=sk-...UA
-  action:  Rotate at platform.openai.com/api-keys
+  action:  Remove this history entry and rotate the credential
 
 [HIGH] ~/.zsh_history:576
-  type:    github_token
+  type:    config_check
   command: export GITHUB_TOKEN="ghp...P3"
-  action:  Rotate at github.com/settings/tokens
+  action:  Review this configured pattern match
 
 2 finding(s) detected (2 high, 0 medium, 0 low).
 Remove flagged history entries and rotate affected credentials.
@@ -116,18 +116,7 @@ $ shg patterns
   inline_assign     VAR=value with sensitive keywords
   auth_header       Authorization: Bearer <token>, --password <val>
   credential_url    scheme://user:pass@host
-  openai_api_key    sk-... (OpenAI)
-  anthropic_api_key sk-ant-... (Anthropic)
-  github_token      ghp_... (GitHub)
-  github_oauth      gho_... (GitHub OAuth)
-  github_pat        github_pat_... (GitHub fine-grained PAT)
-  github_app_token  ghs_... (GitHub App)
-  slack_bot_token   xoxb-... (Slack)
-  slack_user_token  xoxp-... (Slack)
-  slack_app_token   xapp-... (Slack)
-  aws_access_key    AKIA... / ASIA... (AWS)
-  stripe_key        sk_live_... (Stripe)
-  stripe_webhook    whsec_... (Stripe)
+  config_check      compiled check.rules pattern match
   private_key       -----BEGIN * KEY----- markers
   age_secret_key    AGE-SECRET-KEY-1... markers
   ssh_key           ssh-rsa AAAA... public keys

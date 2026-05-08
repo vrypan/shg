@@ -13,7 +13,6 @@ const rules = @import("rules.zig");
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
 
-const detect_known = @import("detect/known_tokens.zig");
 const detect_keys = @import("detect/private_keys.zig");
 const detect_assign = @import("detect/inline_assign.zig");
 const detect_auth = @import("detect/auth_header.zig");
@@ -32,6 +31,10 @@ pub fn main(init: std.process.Init) !void {
     var out_buf: [32768]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(io, &out_buf);
     defer stdout.flush() catch {};
+
+    var err_buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
+    defer stderr.flush() catch {};
 
     const raw_args = try init.minimal.args.toSlice(arena_alloc);
     const args = cli.parse(raw_args, &stdout.interface, arena_alloc) catch |err| {
@@ -56,6 +59,11 @@ pub fn main(init: std.process.Init) !void {
     var counts = [4]usize{ 0, 0, 0, 0 };
     var has_findings = false;
     const rules_cache = try loadRulesCache(io, arena_alloc, init.environ_map);
+    if (rules_cache == null) {
+        try stderr.interface.writeAll("shg: no compiled rules found; run shg-config compile\n");
+        try stderr.flush();
+        std.process.exit(2);
+    }
 
     if (args.scan_hist) {
         const paths: []const []const u8 = if (args.paths.len > 0)
@@ -66,10 +74,10 @@ pub fn main(init: std.process.Init) !void {
         for (paths) |path| {
             const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
                 if (err == error.FileNotFound or err == error.AccessDenied) continue;
-                var err_buf: [4096]u8 = undefined;
-                var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
-                stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
-                stderr.flush() catch {};
+                var file_err_buf: [4096]u8 = undefined;
+                var file_stderr = Io.File.stderr().writerStreaming(io, &file_err_buf);
+                file_stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
+                file_stderr.flush() catch {};
                 continue;
             };
             defer file.close(io);
@@ -127,7 +135,6 @@ fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) !
     const values = environ.values();
     for (keys, values, 0..) |key, value, i| {
         if (key.len == 0 or value.len == 0) continue;
-        if (isAllowedEnvKey(key)) continue;
         const cmd = try std.mem.concat(alloc, u8, &.{ key, "=", value });
         try entries.append(alloc, .{
             .file = "<env>",
@@ -138,22 +145,6 @@ fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) !
         });
     }
     return entries.toOwnedSlice(alloc);
-}
-
-fn isAllowedEnvKey(key: []const u8) bool {
-    const allowlist = [_][]const u8{
-        "SSH_AUTH_SOCK",
-        "STARSHIP_SESSION_KEY",
-        "GPG_AGENT_INFO",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "PWD",
-        "OLDPWD",
-        "OLD_PWD",
-    };
-    for (allowlist) |allowed| {
-        if (std.ascii.eqlIgnoreCase(key, allowed)) return true;
-    }
-    return false;
 }
 
 fn scanEntries(
@@ -190,7 +181,6 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
     const detectors = [_]DetectFn{
-        detect_known.detect,
         detect_keys.detect,
         detect_assign.detect,
         detect_auth.detect,
@@ -231,7 +221,8 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
             while (i < cache.ruleCount()) : (i += 1) {
                 const rule = try cache.rule(i);
                 if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
-                const redacted = try redact.redactCommand(e.command, rule.pattern, alloc);
+                const token = configCheckToken(rule, e.command) orelse rule.pattern;
+                const redacted = try redact.redactCommand(e.command, token, alloc);
                 try findings.append(alloc, .{
                     .entry = e,
                     .det_type = "config_check",
@@ -247,14 +238,28 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
     return findings.toOwnedSlice(alloc);
 }
 
+fn configCheckToken(rule: rules.Rule, text: []const u8) ?[]const u8 {
+    const idx = switch (rule.match_kind) {
+        .substring => std.mem.indexOf(u8, text, rule.pattern),
+        .exact => if (std.mem.eql(u8, text, rule.pattern)) @as(?usize, 0) else null,
+        .prefix => if (std.mem.startsWith(u8, text, rule.pattern)) @as(?usize, 0) else null,
+    } orelse return null;
+
+    var start = idx;
+    while (start > 0 and isConfigTokenChar(text[start - 1])) start -= 1;
+
+    var end = idx + rule.pattern.len;
+    while (end < text.len and isConfigTokenChar(text[end])) end += 1;
+
+    if (end <= start) return null;
+    return text[start..end];
+}
+
+fn isConfigTokenChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '/';
+}
+
 fn getRecommendation(det_type: []const u8) []const u8 {
-    if (std.mem.eql(u8, det_type, "openai_api_key")) return "Rotate at platform.openai.com/api-keys";
-    if (std.mem.eql(u8, det_type, "anthropic_api_key")) return "Rotate at console.anthropic.com";
-    if (std.mem.startsWith(u8, det_type, "github_")) return "Rotate at github.com/settings/tokens";
-    if (std.mem.eql(u8, det_type, "aws_access_key") or
-        std.mem.eql(u8, det_type, "aws_temp_access_key")) return "Rotate via AWS IAM console";
-    if (std.mem.startsWith(u8, det_type, "stripe_")) return "Rotate at dashboard.stripe.com/apikeys";
-    if (std.mem.startsWith(u8, det_type, "slack_")) return "Rotate in Slack app configuration";
     if (std.mem.eql(u8, det_type, "private_key") or
         std.mem.eql(u8, det_type, "ssh_key")) return "Private key must not appear in shell history";
     if (std.mem.eql(u8, det_type, "credential_url")) return "Avoid embedding credentials in URLs";
@@ -268,18 +273,7 @@ fn printPatterns(w: *Io.File.Writer) !void {
         \\  inline_assign     VAR=value with sensitive keywords
         \\  auth_header       Authorization: Bearer <token>, --password <val>
         \\  credential_url    scheme://user:pass@host
-        \\  openai_api_key    sk-... (OpenAI)
-        \\  anthropic_api_key sk-ant-... (Anthropic)
-        \\  github_token      ghp_... (GitHub)
-        \\  github_oauth      gho_... (GitHub OAuth)
-        \\  github_pat        github_pat_... (GitHub fine-grained PAT)
-        \\  github_app_token  ghs_... (GitHub App)
-        \\  slack_bot_token   xoxb-... (Slack)
-        \\  slack_user_token  xoxp-... (Slack)
-        \\  slack_app_token   xapp-... (Slack)
-        \\  aws_access_key    AKIA... / ASIA... (AWS)
-        \\  stripe_key        sk_live_... (Stripe)
-        \\  stripe_webhook    whsec_... (Stripe)
+        \\  config_check      compiled check.rules pattern match
         \\  private_key       -----BEGIN * KEY----- markers
         \\  age_secret_key    AGE-SECRET-KEY-1... markers
         \\  ssh_key           ssh-rsa AAAA... public keys
@@ -297,7 +291,6 @@ test {
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
-    _ = @import("detect/known_tokens.zig");
     _ = @import("detect/private_keys.zig");
     _ = @import("detect/inline_assign.zig");
     _ = @import("detect/auth_header.zig");
@@ -340,7 +333,7 @@ test "duplicate token candidates collapse to one finding" {
         alloc.free(findings);
     }
     try std.testing.expectEqual(@as(usize, 1), findings.len);
-    try std.testing.expectEqualStrings("github_token", findings[0].det_type);
+    try std.testing.expectEqualStrings("auth_header", findings[0].det_type);
 }
 
 test "environment entries are converted to assignments" {
@@ -365,10 +358,10 @@ test "environment entries are converted to assignments" {
         alloc.free(findings);
     }
     try std.testing.expectEqual(@as(usize, 1), findings.len);
-    try std.testing.expectEqualStrings("github_token", findings[0].det_type);
+    try std.testing.expectEqualStrings("inline_assign", findings[0].det_type);
 }
 
-test "allowed environment keys are skipped" {
+test "compiled ignore rules suppress environment assignments" {
     const alloc = std.testing.allocator;
     var env = std.process.Environ.Map.init(alloc);
     defer env.deinit();
@@ -381,14 +374,63 @@ test "allowed environment keys are skipped" {
     try env.put("OLD_PWD", "/Users/example/old");
     try env.put("GITHUB_PUBLIC_REPOS_TOKEN", "ghp_abcdefghijklmnopqrstuvwxyz012345");
 
+    const cache_bytes = try rules.compile(alloc,
+        \\prefix:SSH_AUTH_SOCK=
+        \\prefix:STARSHIP_SESSION_KEY=
+        \\prefix:GPG_AGENT_INFO=
+        \\prefix:DBUS_SESSION_BUS_ADDRESS=
+        \\prefix:PWD=
+        \\prefix:OLDPWD=
+        \\prefix:OLD_PWD=
+    ,
+        "",
+    );
+    defer alloc.free(cache_bytes);
+    const cache = try rules.Cache.init(cache_bytes);
+
     const entries = try parseEnv(&env, alloc);
     defer {
         for (entries) |e| alloc.free(e.command);
         alloc.free(entries);
     }
 
-    try std.testing.expectEqual(@as(usize, 1), entries.len);
-    try std.testing.expectEqualStrings("GITHUB_PUBLIC_REPOS_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
+    var visible: usize = 0;
+    for (entries) |e| {
+        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+        defer {
+            for (findings) |f| alloc.free(f.redacted_cmd);
+            alloc.free(findings);
+        }
+        for (findings) |f| {
+            if (f.severity != .ignore) visible += 1;
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), visible);
+}
+
+test "compiled check rules redact full token-like match" {
+    const alloc = std.testing.allocator;
+    const cache_bytes = try rules.compile(alloc, "", "ghp_");
+    defer alloc.free(cache_bytes);
+    const cache = try rules.Cache.init(cache_bytes);
+    const e = Entry{
+        .file = "test",
+        .line = 1,
+        .timestamp = null,
+        .raw = "CUSTOM_VALUE=ghp_abcdefghijklmnopqrstuvwxyz012345",
+        .command = "CUSTOM_VALUE=ghp_abcdefghijklmnopqrstuvwxyz012345",
+    };
+
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqualStrings("config_check", findings[0].det_type);
+    try std.testing.expect(std.mem.indexOf(u8, findings[0].redacted_cmd, "abcdefghijklmnopqrstuvwxyz012345") == null);
 }
 
 test "corpus true positives produce one visible finding per line" {
