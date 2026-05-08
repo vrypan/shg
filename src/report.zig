@@ -18,19 +18,28 @@ pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
 fn printHuman(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     const cmd = if (opts.redacted) f.redacted_cmd else f.entry.command;
     try printSeverity(w, f.severity, opts.color);
-    try w.interface.writeAll("   ");
+    try w.interface.writeAll(" ");
     try printCommand(w, cmd, opts.color);
     try w.interface.writeByte('\n');
-    try w.interface.print("@ {s}:{d} [{s}]\n", .{ f.entry.file, f.entry.line, f.det_type });
+    try w.interface.print("      {s}:{d} [{s}]\n", .{ f.entry.file, f.entry.line, f.det_type });
     try w.interface.writeByte('\n');
+}
+
+fn severityBadge(severity: Severity) []const u8 {
+    return switch (severity) {
+        .high => "[!!!]",
+        .medium => "[!! ]",
+        .low => "[!  ]",
+        .ignore => "[   ]",
+    };
 }
 
 fn printSeverity(w: *Io.File.Writer, severity: Severity, color: bool) !void {
     if (!color) {
-        try w.interface.print("[{s}]", .{severity.tag()});
+        try w.interface.writeAll(severityBadge(severity));
         return;
     }
-    try w.interface.print("{s}[{s}]{s}", .{ severityStyle(severity), severity.tag(), ansi_reset });
+    try w.interface.print("{s}{s}{s}", .{ severityStyle(severity), severityBadge(severity), ansi_reset });
 }
 
 fn printCommand(w: *Io.File.Writer, cmd: []const u8, color: bool) !void {

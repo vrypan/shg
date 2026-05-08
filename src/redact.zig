@@ -24,10 +24,13 @@ pub fn redactCommand(cmd: []const u8, token: []const u8, alloc: std.mem.Allocato
     };
     const redacted = try redactToken(token, alloc);
     defer alloc.free(redacted);
-    const out = try alloc.alloc(u8, cmd.len - token.len + redacted.len);
+    // Truncate after the redacted token so any subsequent sensitive values are not shown.
+    const has_more = idx + token.len < cmd.len;
+    const suffix = if (has_more) "..." else "";
+    const out = try alloc.alloc(u8, idx + redacted.len + suffix.len);
     @memcpy(out[0..idx], cmd[0..idx]);
     @memcpy(out[idx..][0..redacted.len], redacted);
-    @memcpy(out[idx + redacted.len ..], cmd[idx + token.len ..]);
+    if (has_more) @memcpy(out[idx + redacted.len ..], "...");
     return .{ .text = out, .match_start = idx, .match_len = redacted.len };
 }
 
@@ -45,11 +48,18 @@ test "redact short token" {
     try std.testing.expectEqualStrings("[REDACTED]", r);
 }
 
-test "redact command" {
+test "redact command token at end" {
     const alloc = std.testing.allocator;
     const r = try redactCommand("export API_KEY=sk-abc123def456", "sk-abc123def456", alloc);
     defer alloc.free(r.text);
     try std.testing.expectEqualStrings("export API_KEY=sk-...56", r.text);
     try std.testing.expectEqual(@as(usize, 15), r.match_start);
     try std.testing.expectEqual(@as(usize, 8), r.match_len);
+}
+
+test "redact command truncates trailing content" {
+    const alloc = std.testing.allocator;
+    const r = try redactCommand("curl -u admin:s3cr3tpassword --verbose", "s3cr3tpassword", alloc);
+    defer alloc.free(r.text);
+    try std.testing.expectEqualStrings("curl -u admin:s3c...rd...", r.text);
 }
