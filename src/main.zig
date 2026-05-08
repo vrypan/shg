@@ -51,43 +51,43 @@ pub fn main(init: std.process.Init) !void {
         .show_full = args.show_full,
     };
 
-    const paths: []const []const u8 = if (args.paths.len > 0)
-        args.paths
-    else
-        try sources.discover(io, arena_alloc, init.environ_map);
-
     var counts = [4]usize{ 0, 0, 0, 0 };
     var has_findings = false;
 
-    for (paths) |path| {
-        const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
-            if (err == error.FileNotFound or err == error.AccessDenied) continue;
-            var err_buf: [4096]u8 = undefined;
-            var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
-            stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
-            stderr.flush() catch {};
-            continue;
-        };
-        defer file.close(io);
+    if (args.scan_hist) {
+        const paths: []const []const u8 = if (args.paths.len > 0)
+            args.paths
+        else
+            try sources.discover(io, arena_alloc, init.environ_map);
 
+        for (paths) |path| {
+            const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
+                if (err == error.FileNotFound or err == error.AccessDenied) continue;
+                var err_buf: [4096]u8 = undefined;
+                var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
+                stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
+                stderr.flush() catch {};
+                continue;
+            };
+            defer file.close(io);
+
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const a = arena.allocator();
+
+            var read_buf: [65536]u8 = undefined;
+            var reader = file.reader(io, &read_buf);
+            const entries = try parseFile(&reader.interface, path, a);
+            try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, &stdout, &counts, &has_findings);
+        }
+    }
+
+    if (args.scan_env) {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const a = arena.allocator();
-
-        var read_buf: [65536]u8 = undefined;
-        var reader = file.reader(io, &read_buf);
-        const entries = try parseFile(&reader.interface, path, a);
-
-        for (entries) |e| {
-            const findings = try detectEntry(e, a, args.entropy_threshold);
-            for (findings) |f| {
-                if (f.severity == .ignore) continue;
-                if (@intFromEnum(f.severity) < @intFromEnum(args.min_severity)) continue;
-                has_findings = true;
-                counts[@intFromEnum(f.severity)] += 1;
-                try report.printFinding(&stdout, f, report_opts);
-            }
-        }
+        const entries = try parseEnv(init.environ_map, a);
+        try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, &stdout, &counts, &has_findings);
     }
 
     try report.printSummary(&stdout, counts);
@@ -102,6 +102,46 @@ fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]
     // The zsh parser also accepts plain one-command-per-line histories. Using it
     // as the default preserves zsh extended metadata for explicit --path scans.
     return zsh_parser.parse(reader, path, alloc);
+}
+
+fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) ![]Entry {
+    var entries: std.ArrayList(Entry) = .empty;
+    const keys = environ.keys();
+    const values = environ.values();
+    for (keys, values, 0..) |key, value, i| {
+        if (key.len == 0 or value.len == 0) continue;
+        const cmd = try std.mem.concat(alloc, u8, &.{ key, "=", value });
+        try entries.append(alloc, .{
+            .file = "<env>",
+            .line = i + 1,
+            .timestamp = null,
+            .raw = cmd,
+            .command = cmd,
+        });
+    }
+    return entries.toOwnedSlice(alloc);
+}
+
+fn scanEntries(
+    entries: []const Entry,
+    alloc: std.mem.Allocator,
+    entropy_threshold: f64,
+    min_severity: Severity,
+    report_opts: report.Options,
+    stdout: *Io.File.Writer,
+    counts: *[4]usize,
+    has_findings: *bool,
+) !void {
+    for (entries) |e| {
+        const findings = try detectEntry(e, alloc, entropy_threshold);
+        for (findings) |f| {
+            if (f.severity == .ignore) continue;
+            if (@intFromEnum(f.severity) < @intFromEnum(min_severity)) continue;
+            has_findings.* = true;
+            counts[@intFromEnum(f.severity)] += 1;
+            try report.printFinding(stdout, f, report_opts);
+        }
+    }
 }
 
 fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Finding {
@@ -235,6 +275,31 @@ test "duplicate token candidates collapse to one finding" {
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
     const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqualStrings("github_token", findings[0].det_type);
+}
+
+test "environment entries are converted to assignments" {
+    const alloc = std.testing.allocator;
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+    try env.put("GITHUB_TOKEN", "ghp_abcdefghijklmnopqrstuvwxyz012345");
+
+    const entries = try parseEnv(&env, alloc);
+    defer {
+        for (entries) |e| alloc.free(e.command);
+        alloc.free(entries);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), entries.len);
+    try std.testing.expectEqualStrings("<env>", entries[0].file);
+    try std.testing.expectEqualStrings("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
+
+    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);

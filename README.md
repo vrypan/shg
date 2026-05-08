@@ -59,23 +59,29 @@ shg scan [options]
 
 Options:
   -p, --path <FILE>            History file to scan [repeatable]
+      --env[=BOOL]             Scan environment variables [default: true]
+      --hist[=BOOL]            Scan history files [default: true]
       --min-severity <LEVEL>   low|medium|high [default: low]
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
       --show-full              Disable redaction
   -h, --help                   Print help
 ```
 
-With no `--path` flags, `shg` auto-detects all supported history files
-present on the system.
+By default, `shg scan` checks both environment variables and history files.
+With no `--path` flags, `shg` auto-detects all supported history files present
+on the system. Use `--env false` or `--hist false` to disable a source.
 
 **Examples:**
 
 ```sh
-# Scan all auto-detected history files
+# Scan environment variables and all auto-detected history files
 shg scan
 
+# Scan only environment variables
+shg scan --hist false
+
 # Scan a specific file
-shg scan --path ~/.bash_history
+shg scan --env false --path ~/.bash_history
 
 # Scan multiple files
 shg scan --path ~/.zsh_history --path ~/.bash_history

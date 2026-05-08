@@ -10,6 +10,8 @@ pub const Subcommand = enum { scan, patterns, help, version };
 pub const Args = struct {
     subcommand: Subcommand,
     paths: []const []const u8,
+    scan_env: bool,
+    scan_hist: bool,
     min_severity: Severity,
     entropy_threshold: f64,
     show_full: bool,
@@ -23,6 +25,8 @@ const commands = [_]zecli.CommandEntry{
 
 const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",  .repeatable = true },
+    .{ .name = "env",                              .value = .bool_optional,                  .description = "Scan environment variables", .default_value = "true" },
+    .{ .name = "hist",                             .value = .bool_optional,                  .description = "Scan history files",          .default_value = "true" },
     .{ .name = "min-severity",                     .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "low" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
     .{ .name = "show-full",                                                                  .description = "Disable redaction"                          },
@@ -82,12 +86,12 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
     switch (subcmd) {
         .version => {
             try writer.print("{s}\n", .{build_options.version});
-            return Args{ .subcommand = .version, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return defaultArgs(.version);
         },
         .help => {
             try zecli.printCommandHelp(alloc, writer, root_spec);
             try zecli.printCommandList(writer, &commands);
-            return Args{ .subcommand = .help, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return defaultArgs(.help);
         },
         .patterns => {
             if (zecli.helpRequested(subcmd_args)) {
@@ -95,12 +99,12 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             } else {
                 _ = try zecli.parseCommand(alloc, writer, subcmd_args, patterns_spec);
             }
-            return Args{ .subcommand = .patterns, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+            return defaultArgs(.patterns);
         },
         .scan => {
             if (zecli.helpRequested(subcmd_args)) {
                 try zecli.printCommandHelp(alloc, writer, scan_spec);
-                return Args{ .subcommand = .help, .paths = &.{}, .min_severity = .low, .entropy_threshold = 3.5, .show_full = false };
+                return defaultArgs(.help);
             }
             const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, scan_spec);
 
@@ -126,6 +130,8 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             return Args{
                 .subcommand = .scan,
                 .paths = try paths.toOwnedSlice(alloc),
+                .scan_env = zecli.parseBool(parsed.last("env") orelse "true") catch unreachable,
+                .scan_hist = zecli.parseBool(parsed.last("hist") orelse "true") catch unreachable,
                 .min_severity = min_sev,
                 .entropy_threshold = entropy_threshold,
                 .show_full = parsed.present("show-full"),
@@ -141,6 +147,18 @@ fn parseSeverity(s: []const u8) ?Severity {
     return null;
 }
 
+fn defaultArgs(subcommand: Subcommand) Args {
+    return .{
+        .subcommand = subcommand,
+        .paths = &.{},
+        .scan_env = true,
+        .scan_hist = true,
+        .min_severity = .low,
+        .entropy_threshold = 3.5,
+        .show_full = false,
+    };
+}
+
 const TestWriter = struct {
     pub fn print(_: *TestWriter, comptime _: []const u8, _: anytype) !void {}
     pub fn writeAll(_: *TestWriter, _: []const u8) !void {}
@@ -152,4 +170,22 @@ test "scan parses show full" {
     const raw = [_][:0]const u8{ "shg", "scan", "--show-full" };
     const args = try parse(&raw, &writer, alloc);
     try std.testing.expect(args.show_full);
+}
+
+test "scan source flags default to enabled" {
+    const alloc = std.testing.allocator;
+    var writer = TestWriter{};
+    const raw = [_][:0]const u8{ "shg", "scan" };
+    const args = try parse(&raw, &writer, alloc);
+    try std.testing.expect(args.scan_env);
+    try std.testing.expect(args.scan_hist);
+}
+
+test "scan source flags can be disabled" {
+    const alloc = std.testing.allocator;
+    var writer = TestWriter{};
+    const raw = [_][:0]const u8{ "shg", "scan", "--env", "false", "--hist=false" };
+    const args = try parse(&raw, &writer, alloc);
+    try std.testing.expect(!args.scan_env);
+    try std.testing.expect(!args.scan_hist);
 }
