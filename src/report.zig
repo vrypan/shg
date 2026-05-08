@@ -9,25 +9,40 @@ pub const Options = struct {
     color: bool = false,
     json: bool = false,
     summary: bool = false,
+    one_line: bool = false,
 };
 
 pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     if (opts.summary) return;
     if (@intFromEnum(f.severity) < @intFromEnum(opts.level)) return;
     if (f.severity == .ignore) return;
-    if (opts.json) try printFindingJson(w, f, opts) else try printHuman(w, f, opts);
+    if (opts.json) try printFindingJson(w, f, opts) else if (opts.one_line) try printFindingOneLine(w, f, opts) else try printHuman(w, f, opts);
+}
+
+fn printFindingOneLine(w: *Io.File.Writer, f: Finding, opts: Options) !void {
+    const cmd = if (opts.redacted) f.redacted_cmd else f.entry.command;
+    const source = if (std.mem.eql(u8, f.entry.file, "<env>")) "ENV " else "HIST";
+    if (opts.color) {
+        try w.interface.print("{s}{s}{s} {s} {s}{s}{s}\n", .{
+            severityStyle(f.severity), severityBadge(f.severity), ansi_reset,
+            source,                    ansi_bold,                 cmd,
+            ansi_reset,
+        });
+    } else {
+        try w.interface.print("{s} {s} {s}\n", .{ severityBadge(f.severity), source, cmd });
+    }
 }
 
 fn printFindingJson(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     const cmd = if (opts.redacted) f.redacted_cmd else f.entry.command;
     const record = .{
-        .severity    = f.severity.name(),
-        .file        = f.entry.file,
-        .line        = f.entry.line,
-        .timestamp   = f.entry.timestamp,
-        .det_type    = f.det_type,
-        .command     = cmd,
-        .score       = f.score,
+        .severity = f.severity.name(),
+        .file = f.entry.file,
+        .line = f.entry.line,
+        .timestamp = f.entry.timestamp,
+        .det_type = f.det_type,
+        .command = cmd,
+        .score = f.score,
         .recommendation = f.recommendation,
     };
     try std.json.Stringify.value(record, .{}, &w.interface);

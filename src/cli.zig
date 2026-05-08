@@ -17,6 +17,7 @@ pub const Args = struct {
     redacted: bool,
     json: bool,
     summary: bool,
+    one_line: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -34,6 +35,7 @@ const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
     .{ .name = "json",                             .value = .bool_optional,                  .description = "Output findings as NDJSON",    .default_value = "false" },
     .{ .name = "summary",                          .value = .bool_optional,                  .description = "Print H M L counts and exit",  .default_value = "false" },
+    .{ .name = "one-line",                         .value = .bool_optional,                  .description = "One line per finding",         .default_value = "false" },
 };
 
 const scan_spec = zecli.CommandSpec{
@@ -141,6 +143,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable,
                 .json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable,
                 .summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable,
+                .one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable,
             };
         },
     }
@@ -164,6 +167,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .redacted = true,
         .json = false,
         .summary = false,
+        .one_line = false,
     };
 }
 

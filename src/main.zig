@@ -58,6 +58,7 @@ pub fn main(init: std.process.Init) !void {
         .color = !args.json and !args.summary and try colorEnabled(io, init.environ_map),
         .json = args.json,
         .summary = args.summary,
+        .one_line = args.one_line,
     };
 
     var counts = [4]usize{ 0, 0, 0, 0 };
@@ -121,7 +122,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.summary) {
         try stdout.interface.print("{d} {d} {d}\n", .{ counts[3], counts[2], counts[1] });
-    } else if (!args.json) {
+    } else if (!args.json and !args.one_line) {
         try report.printSummary(&stdout, counts);
     }
     try stdout.flush();
