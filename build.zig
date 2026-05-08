@@ -1,5 +1,15 @@
 const std = @import("std");
 
+const zon_text = @embedFile("build.zig.zon");
+
+fn versionFromZon() []const u8 {
+    const marker = ".version = \"";
+    const start = std.mem.indexOf(u8, zon_text, marker) orelse @panic("version not found in build.zig.zon");
+    const rest = zon_text[start + marker.len ..];
+    const end = std.mem.indexOf(u8, rest, "\"") orelse @panic("unterminated version in build.zig.zon");
+    return rest[0..end];
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize: std.builtin.OptimizeMode = .ReleaseSmall;
@@ -7,7 +17,7 @@ pub fn build(b: *std.Build) void {
     const zecli = b.dependency("zecli", .{});
 
     const options = b.addOptions();
-    options.addOption([]const u8, "version", "0.1.0");
+    options.addOption([]const u8, "version", versionFromZon());
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
