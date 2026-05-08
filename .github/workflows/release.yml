@@ -18,20 +18,9 @@ jobs:
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.target }})
+    name: Build all targets
     needs: version
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-macos
-            os: macos-latest
-          - target: x86_64-macos
-            os: macos-latest
-          - target: aarch64-linux-musl
-            os: ubuntu-latest
-          - target: x86_64-linux-musl
-            os: ubuntu-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -40,18 +29,18 @@ jobs:
         with:
           version: '0.16.0'
 
-      - name: Build
-        run: zig build -Dtarget=${{ matrix.target }}
-
-      - name: Package
+      - name: Build all targets
         run: |
-          mkdir dist
-          tar czf dist/shg-${{ needs.version.outputs.tag }}-${{ matrix.target }}.tar.gz \
-            -C zig-out/bin shg shg-config
+          for target in aarch64-macos x86_64-macos aarch64-linux-musl x86_64-linux-musl; do
+            zig build -Dtarget=$target
+            mkdir -p dist
+            tar czf dist/shg-${{ needs.version.outputs.tag }}-${target}.tar.gz \
+              -C zig-out/bin shg shg-config
+          done
 
       - uses: actions/upload-artifact@v7
         with:
-          name: shg-${{ matrix.target }}
+          name: shg-dist
           path: dist/
 
   release:
@@ -66,8 +55,8 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: shg-dist
           path: dist/
-          merge-multiple: true
 
       - name: Checksums
         run: |
