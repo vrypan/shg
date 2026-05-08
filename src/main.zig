@@ -72,10 +72,6 @@ pub fn main(init: std.process.Init) !void {
     if (args.scan_hist) {
         const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
 
-        if (!args.summary and args.paths.len == 0 and !stdin_is_piped and isZshSession(init.environ_map)) {
-            try stderr.interface.writeAll("shg: zsh may keep recent history in memory; run 'fc -W' before scanning. If HISTFILE is custom, pass --path \"$HISTFILE\"\n");
-            try stderr.flush();
-        }
 
         if (stdin_is_piped) {
             var arena = std.heap.ArenaAllocator.init(gpa);
@@ -133,16 +129,6 @@ pub fn main(init: std.process.Init) !void {
     if (has_findings) std.process.exit(1);
 }
 
-fn isZshSession(environ: *const std.process.Environ.Map) bool {
-    if (environ.get("ZSH_NAME")) |name| {
-        if (std.ascii.eqlIgnoreCase(name, "zsh")) return true;
-    }
-    if (environ.get("SHELL")) |shell| {
-        const base = std.fs.path.basename(shell);
-        if (std.mem.eql(u8, base, "zsh") or std.mem.eql(u8, base, "-zsh")) return true;
-    }
-    return false;
-}
 
 fn stdinHasHistory(io: Io) !bool {
     const stdin = Io.File.stdin();
