@@ -9,3 +9,7 @@
 ~/.mysql_history
 ~/.sqlite_history
 ~/.rediscli_history
+~/.node_repl_history
+~/.irb_history
+~/.pry_history
+~/.Rhistory
