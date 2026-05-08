@@ -54,7 +54,8 @@ pub fn main(init: std.process.Init) !void {
     const report_opts = report.Options{
         .level = args.level,
         .redacted = args.redacted,
-        .color = try colorEnabled(io, init.environ_map),
+        .color = !args.json and try colorEnabled(io, init.environ_map),
+        .json = args.json,
     };
 
     var counts = [4]usize{ 0, 0, 0, 0 };
@@ -120,7 +121,7 @@ pub fn main(init: std.process.Init) !void {
         try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
-    try report.printSummary(&stdout, counts);
+    if (!args.json) try report.printSummary(&stdout, counts);
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);

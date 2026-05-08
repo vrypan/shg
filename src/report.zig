@@ -7,12 +7,29 @@ pub const Options = struct {
     level: Severity = .low,
     redacted: bool = true,
     color: bool = false,
+    json: bool = false,
 };
 
 pub fn printFinding(w: *Io.File.Writer, f: Finding, opts: Options) !void {
     if (@intFromEnum(f.severity) < @intFromEnum(opts.level)) return;
     if (f.severity == .ignore) return;
-    try printHuman(w, f, opts);
+    if (opts.json) try printFindingJson(w, f, opts) else try printHuman(w, f, opts);
+}
+
+fn printFindingJson(w: *Io.File.Writer, f: Finding, opts: Options) !void {
+    const cmd = if (opts.redacted) f.redacted_cmd else f.entry.command;
+    const record = .{
+        .severity    = f.severity.name(),
+        .file        = f.entry.file,
+        .line        = f.entry.line,
+        .timestamp   = f.entry.timestamp,
+        .det_type    = f.det_type,
+        .command     = cmd,
+        .score       = f.score,
+        .recommendation = f.recommendation,
+    };
+    try std.json.Stringify.value(record, .{}, &w.interface);
+    try w.interface.writeByte('\n');
 }
 
 fn printHuman(w: *Io.File.Writer, f: Finding, opts: Options) !void {

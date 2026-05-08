@@ -15,6 +15,7 @@ pub const Args = struct {
     level: Severity,
     entropy_threshold: f64,
     redacted: bool,
+    json: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -30,6 +31,7 @@ const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
     .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
+    .{ .name = "json",                             .value = .bool_optional,                  .description = "Output findings as NDJSON",    .default_value = "false" },
 };
 
 const scan_spec = zecli.CommandSpec{
@@ -135,6 +137,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .level = level,
                 .entropy_threshold = entropy_threshold,
                 .redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable,
+                .json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable,
             };
         },
     }
@@ -156,6 +159,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .level = .high,
         .entropy_threshold = 3.5,
         .redacted = true,
+        .json = false,
     };
 }
 

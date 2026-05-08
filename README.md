@@ -61,6 +61,7 @@ Options:
       --level <LEVEL>          low|medium|high [default: high]
       --entropy-threshold <N>  Shannon entropy cutoff [default: 3.5]
       --redacted[=BOOL]        Redact secrets in output [default: true]
+      --json[=BOOL]            Output findings as NDJSON [default: false]
   -h, --help                   Print help
 ```
 
@@ -89,6 +90,12 @@ cat ~/.zsh_history | shg scan --env false
 
 # Include low and medium findings
 shg scan --level low
+
+# Output as NDJSON (one JSON object per finding)
+shg scan --json
+
+# NDJSON piped to jq
+shg scan --json | jq 'select(.severity == "high")'
 ```
 
 Zsh may keep recent commands in memory before writing them to `$HISTFILE`.
@@ -270,7 +277,6 @@ afterwards to apply the changes.
 - **Read-only.** The current release only scans; it does not modify history
   files. A `fix` subcommand (with atomic writes and automatic backups) is
   planned for a future release.
-- JSON output is intentionally deferred until a later release.
 
 ## License
 
