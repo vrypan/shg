@@ -28,12 +28,25 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
         }
     }
 
-    if (std.mem.indexOf(u8, cmd, "ssh-rsa AAAA") != null) {
-        try results.append(alloc, .{
-            .token = "ssh-rsa",
-            .det_type = "ssh_key",
-            .signals = .{ .is_private_key = true, .token_len = 20 },
-        });
+    const ssh_prefixes = [_][]const u8{
+        "ssh-rsa ",
+        "ssh-ed25519 ",
+        "ssh-dss ",
+        "ecdsa-sha2-nistp256 ",
+        "ecdsa-sha2-nistp384 ",
+        "ecdsa-sha2-nistp521 ",
+        "sk-ssh-ed25519@openssh.com ",
+        "sk-ecdsa-sha2-nistp256@openssh.com ",
+    };
+    for (ssh_prefixes) |prefix| {
+        if (std.mem.indexOf(u8, cmd, prefix) != null) {
+            try results.append(alloc, .{
+                .token = prefix,
+                .det_type = "ssh_key",
+                .signals = .{ .is_private_key = true, .token_len = 20 },
+            });
+            return results.toOwnedSlice(alloc);
+        }
     }
 
     return results.toOwnedSlice(alloc);
@@ -50,6 +63,19 @@ test "detect encrypted private key marker" {
     defer alloc.free(cs);
     try std.testing.expectEqual(@as(usize, 1), cs.len);
     try std.testing.expectEqualStrings("private_key", cs[0].det_type);
+}
+
+test "detect ssh-ed25519 key" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "cat ~/.ssh/id_ed25519.pub # ssh-ed25519 AAAAC3Nz...",
+        .command = "cat ~/.ssh/id_ed25519.pub # ssh-ed25519 AAAAC3Nz...",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("ssh_key", cs[0].det_type);
 }
 
 test "detect age secret key marker" {

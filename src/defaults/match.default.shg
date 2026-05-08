@@ -103,4 +103,11 @@ tfp_
 -----BEGIN DSA PRIVATE KEY-----
 -----BEGIN PGP PRIVATE KEY BLOCK-----
 AGE-SECRET-KEY-1
-ssh-rsa AAAA
+ssh-rsa
+ssh-ed25519
+ssh-dss
+ecdsa-sha2-nistp256
+ecdsa-sha2-nistp384
+ecdsa-sha2-nistp521
+sk-ssh-ed25519@openssh.com
+sk-ecdsa-sha2-nistp256@openssh.com
