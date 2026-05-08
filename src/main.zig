@@ -72,42 +72,43 @@ pub fn main(init: std.process.Init) !void {
 
     const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
 
-    if (args.scan_hist) {
-        if (stdin_is_piped) {
+    if (args.scan_hist and stdin_is_piped) {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        var read_buf: [65536]u8 = undefined;
+        var reader = Io.File.stdin().readerStreaming(io, &read_buf);
+        const entries = try parseFile(&reader.interface, "<stdin>", a);
+        try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
+    }
+
+    // Scan history paths when: not piped, OR piped but --hist was explicitly requested.
+    if (args.scan_hist and (!stdin_is_piped or args.hist_explicit)) {
+        const paths: []const []const u8 = if (args.paths.len > 0)
+            args.paths
+        else
+            try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
+
+        for (paths) |path| {
+            const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
+                if (err == error.FileNotFound or err == error.AccessDenied) continue;
+                var file_err_buf: [4096]u8 = undefined;
+                var file_stderr = Io.File.stderr().writerStreaming(io, &file_err_buf);
+                file_stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
+                file_stderr.flush() catch {};
+                continue;
+            };
+            defer file.close(io);
+
             var arena = std.heap.ArenaAllocator.init(gpa);
             defer arena.deinit();
             const a = arena.allocator();
 
             var read_buf: [65536]u8 = undefined;
-            var reader = Io.File.stdin().readerStreaming(io, &read_buf);
-            const entries = try parseFile(&reader.interface, "<stdin>", a);
+            var reader = file.reader(io, &read_buf);
+            const entries = try parseFile(&reader.interface, path, a);
             try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
-        } else {
-            const paths: []const []const u8 = if (args.paths.len > 0)
-                args.paths
-            else
-                try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
-
-            for (paths) |path| {
-                const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
-                    if (err == error.FileNotFound or err == error.AccessDenied) continue;
-                    var file_err_buf: [4096]u8 = undefined;
-                    var file_stderr = Io.File.stderr().writerStreaming(io, &file_err_buf);
-                    file_stderr.interface.print("shg: cannot open {s}: {t}\n", .{ path, err }) catch {};
-                    file_stderr.flush() catch {};
-                    continue;
-                };
-                defer file.close(io);
-
-                var arena = std.heap.ArenaAllocator.init(gpa);
-                defer arena.deinit();
-                const a = arena.allocator();
-
-                var read_buf: [65536]u8 = undefined;
-                var reader = file.reader(io, &read_buf);
-                const entries = try parseFile(&reader.interface, path, a);
-                try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
-            }
         }
     }
 

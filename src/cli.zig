@@ -19,6 +19,7 @@ pub const Args = struct {
     summary: bool,
     one_line: bool,
     env_explicit: bool,
+    hist_explicit: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -146,6 +147,7 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable,
                 .one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable,
                 .env_explicit = parsed.last("env") != null,
+                .hist_explicit = parsed.last("hist") != null,
             };
         },
     }
@@ -171,6 +173,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .summary = false,
         .one_line = false,
         .env_explicit = false,
+        .hist_explicit = false,
     };
 }
 
