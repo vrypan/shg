@@ -1,12 +1,14 @@
 const std = @import("std");
 const Io = std.Io;
 const cli = @import("cli.zig");
+const config = @import("config.zig");
 const sources = @import("sources.zig");
 const entry_mod = @import("entry.zig");
 const finding_mod = @import("finding.zig");
 const scorer = @import("scorer.zig");
 const redact = @import("redact.zig");
 const report = @import("report.zig");
+const rules = @import("rules.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
@@ -53,6 +55,7 @@ pub fn main(init: std.process.Init) !void {
 
     var counts = [4]usize{ 0, 0, 0, 0 };
     var has_findings = false;
+    const rules_cache = try loadRulesCache(io, arena_alloc, init.environ_map);
 
     if (args.scan_hist) {
         const paths: []const []const u8 = if (args.paths.len > 0)
@@ -78,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
             var read_buf: [65536]u8 = undefined;
             var reader = file.reader(io, &read_buf);
             const entries = try parseFile(&reader.interface, path, a);
-            try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, &stdout, &counts, &has_findings);
+            try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
         }
     }
 
@@ -87,13 +90,27 @@ pub fn main(init: std.process.Init) !void {
         defer arena.deinit();
         const a = arena.allocator();
         const entries = try parseEnv(init.environ_map, a);
-        try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, &stdout, &counts, &has_findings);
+        try scanEntries(entries, a, args.entropy_threshold, args.min_severity, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
     try report.printSummary(&stdout, counts);
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);
+}
+
+fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?rules.Cache {
+    const path = (try config.compiledFile(alloc, environ)) orelse return null;
+    const file = Io.Dir.openFileAbsolute(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer file.close(io);
+    const stat = try file.stat(io);
+    var read_buf: [8192]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const bytes = try reader.interface.readAlloc(alloc, @intCast(stat.size));
+    return try rules.Cache.init(bytes);
 }
 
 fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
@@ -145,12 +162,13 @@ fn scanEntries(
     entropy_threshold: f64,
     min_severity: Severity,
     report_opts: report.Options,
+    rules_cache: ?rules.Cache,
     stdout: *Io.File.Writer,
     counts: *[4]usize,
     has_findings: *bool,
 ) !void {
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, entropy_threshold);
+        const findings = try detectEntry(e, alloc, entropy_threshold, rules_cache);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(min_severity)) continue;
@@ -161,10 +179,14 @@ fn scanEntries(
     }
 }
 
-fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Finding {
+fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
     defer seen_tokens.deinit(alloc);
+
+    if (rules_cache) |cache| {
+        if (try cache.matchesAny(.ignore, e.command)) return findings.toOwnedSlice(alloc);
+    }
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
     const detectors = [_]DetectFn{
@@ -200,6 +222,25 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64) ![]Fi
                 .redacted_cmd = redacted,
                 .recommendation = getRecommendation(c.det_type),
             });
+        }
+    }
+
+    if (findings.items.len == 0) {
+        if (rules_cache) |cache| {
+            var i: usize = 0;
+            while (i < cache.ruleCount()) : (i += 1) {
+                const rule = try cache.rule(i);
+                if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
+                const redacted = try redact.redactCommand(e.command, rule.pattern, alloc);
+                try findings.append(alloc, .{
+                    .entry = e,
+                    .det_type = "config_check",
+                    .severity = .high,
+                    .score = 7,
+                    .redacted_cmd = redacted,
+                    .recommendation = "Review this configured pattern match",
+                });
+            }
         }
     }
 
@@ -252,6 +293,7 @@ test {
     _ = @import("redact.zig");
     _ = @import("scorer.zig");
     _ = @import("config.zig");
+    _ = @import("rules.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
@@ -276,7 +318,7 @@ test "explicit zsh-format fixture path preserves extended commands" {
     try std.testing.expectEqual(@as(usize, 1), entries.len);
     try std.testing.expectEqualStrings("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", entries[0].command);
 
-    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold);
+    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -292,7 +334,7 @@ test "duplicate token candidates collapse to one finding" {
         .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -317,7 +359,7 @@ test "environment entries are converted to assignments" {
     try std.testing.expectEqualStrings("<env>", entries[0].file);
     try std.testing.expectEqualStrings("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
 
-    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold);
+    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -370,7 +412,7 @@ test "corpus true positives produce one visible finding per line" {
 
     var visible: usize = 0;
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
@@ -404,7 +446,7 @@ test "corpus false positives produce no visible findings" {
     }
 
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold);
+        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);

@@ -191,6 +191,16 @@ Configuration files live in `shg`'s config directory:
 - `$XDG_CONFIG_HOME/shg` when `XDG_CONFIG_HOME` is set
 - `$HOME/.config/shg` otherwise
 
+The config directory contains two pattern files:
+
+- `ignore.rules` for patterns that should suppress findings
+- `check.rules` for additional patterns that should be scanned
+
+Run `shg-config compile` to write `compiled.rules`, the binary cache loaded by
+`shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
+Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
+without a prefix are substring matches.
+
 ## Security
 
 - **No network access.** `shg` never connects to the internet.

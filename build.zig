@@ -23,6 +23,17 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const config_exe = b.addExecutable(.{
+        .name = "shg-config",
+        .root_module = config_mod,
+    });
+    b.installArtifact(config_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
@@ -46,6 +57,7 @@ pub fn build(b: *std.Build) void {
     const smoke_cmd = b.addSystemCommand(&.{ "sh", "tests/smoke.sh" });
     smoke_cmd.step.dependOn(b.getInstallStep());
     smoke_cmd.setEnvironmentVariable("SHG_BIN", b.getInstallPath(.bin, "shg"));
+    smoke_cmd.setEnvironmentVariable("SHG_CONFIG_BIN", b.getInstallPath(.bin, "shg-config"));
     const smoke_step = b.step("smoke", "Run end-to-end smoke tests");
     smoke_step.dependOn(&smoke_cmd.step);
 }

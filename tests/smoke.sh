@@ -5,9 +5,14 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
 shg=${SHG_BIN:-zig-out/bin/shg}
+shg_config=${SHG_CONFIG_BIN:-zig-out/bin/shg-config}
 tp=testdata/corpus/true_positives/zsh_sample.txt
 fp=testdata/corpus/false_positives/bash_safe.txt
 full_secret=sk-abcdefghijklmnopqrstuvwxyz012345678901234567
+tmp=${TMPDIR:-/tmp}/shg-smoke-$$
+xdg=$tmp/xdg
+mkdir -p "$xdg"
+trap 'rm -rf "$tmp"' EXIT
 
 say() {
     printf '%s\n' "$*"
@@ -19,7 +24,7 @@ run_capture() {
 }
 
 say "TEST scan true-positive corpus"
-run_capture "$shg" scan --env false --path "$tp"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '5 finding(s) detected (3 high, 2 medium, 0 low).'
 printf '%s\n' "$output" | grep -q 'type:    credential_url'
@@ -30,19 +35,19 @@ fi
 say "PASS scan true-positive corpus"
 
 say "TEST scan true-positive corpus with --show-full"
-run_capture "$shg" scan --env false --show-full --path "$tp"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --show-full --path "$tp"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$full_secret"
 say "PASS scan true-positive corpus with --show-full"
 
 say "TEST scan false-positive corpus"
-run_capture "$shg" scan --env false --path "$fp"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$fp"
 test "$status" -eq 0
 printf '%s\n' "$output" | grep -q 'No findings detected.'
 say "PASS scan false-positive corpus"
 
 say "TEST scan environment variables"
-run_capture env -i SHG_SMOKE_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 "$shg" scan --hist false
+run_capture env -i XDG_CONFIG_HOME="$xdg" SHG_SMOKE_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 "$shg" scan --hist false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '<env>'
 printf '%s\n' "$output" | grep -q 'type:    github_token'
@@ -65,5 +70,29 @@ run_capture env -i \
 test "$status" -eq 0
 printf '%s\n' "$output" | grep -q 'No findings detected.'
 say "PASS skip known non-secret environment variables"
+
+say "TEST compiled config rules"
+run_capture sh -c 'printf "y\n" | env XDG_CONFIG_HOME="$1" "$2" compile' sh "$xdg" "$shg_config"
+test "$status" -eq 0
+test -s "$xdg/shg/compiled.rules"
+test -s "$xdg/shg/ignore.rules"
+test -s "$xdg/shg/check.rules"
+grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.rules"
+grep -q 'ghp_' "$xdg/shg/check.rules"
+printf '%s\n' 'IGNORED_TOKEN=' >> "$xdg/shg/ignore.rules"
+printf '%s\n' 'custom-secret-pattern' >> "$xdg/shg/check.rules"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
+test "$status" -eq 0
+run_capture env -i XDG_CONFIG_HOME="$xdg" \
+    IGNORED_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 \
+    CUSTOM_VALUE=custom-secret-pattern \
+    "$shg" scan --hist false
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'type:    config_check'
+if printf '%s\n' "$output" | grep -q 'type:    github_token'; then
+    printf '%s\n' "ignore.rules did not suppress ignored token" >&2
+    exit 1
+fi
+say "PASS compiled config rules"
 
 say "SMOKE PASS"
