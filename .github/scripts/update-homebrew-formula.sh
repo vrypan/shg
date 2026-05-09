@@ -48,6 +48,7 @@ class Shg < Formula
 
   def install
     system "zig", "build", "--prefix", prefix
+    (share/"shg/extras").install Dir["extras/*"]
   end
 
   test do
