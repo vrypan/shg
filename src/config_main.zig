@@ -89,9 +89,21 @@ pub fn main(init: std.process.Init) !void {
 
     const compiled_path = (try config.compiledFile(alloc, init.environ_map)).?;
 
-    var ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg");
-    var match_group = try readConfigGroup(io, alloc, dir, "match.", ".shg");
-    var paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg");
+    var ignore_group: ConfigGroup = .{ .text = "", .count = 0 };
+    var match_group: ConfigGroup  = .{ .text = "", .count = 0 };
+    var paths_group: ConfigGroup  = .{ .text = "", .count = 0 };
+
+    if (try config.systemConfigDir(alloc, init.environ_map)) |sys_dir| {
+        if (dirExists(io, sys_dir)) {
+            ignore_group = try readConfigGroup(io, alloc, sys_dir, "ignore.", ".shg");
+            match_group  = try readConfigGroup(io, alloc, sys_dir, "match.",  ".shg");
+            paths_group  = try readConfigGroup(io, alloc, sys_dir, "paths.",  ".shg");
+        }
+    }
+
+    ignore_group = try mergeGroups(alloc, ignore_group, try readConfigGroup(io, alloc, dir, "ignore.", ".shg"));
+    match_group  = try mergeGroups(alloc, match_group,  try readConfigGroup(io, alloc, dir, "match.",  ".shg"));
+    paths_group  = try mergeGroups(alloc, paths_group,  try readConfigGroup(io, alloc, dir, "paths.",  ".shg"));
 
     if (ignore_group.count == 0 or match_group.count == 0 or paths_group.count == 0) {
         try stdout.interface.print("Config files are missing in {s}. \nCreate default ignore.default.shg, match.default.shg, and paths.default.shg? \n[y/N] ", .{dir});
@@ -174,6 +186,19 @@ const ConfigGroup = struct {
     text: []const u8,
     count: usize,
 };
+
+fn dirExists(io: Io, path: []const u8) bool {
+    const d = Io.Dir.openDirAbsolute(io, path, .{ .iterate = false }) catch return false;
+    d.close(io);
+    return true;
+}
+
+fn mergeGroups(alloc: std.mem.Allocator, a: ConfigGroup, b: ConfigGroup) !ConfigGroup {
+    return .{
+        .text = try std.mem.concat(alloc, u8, &.{ a.text, b.text }),
+        .count = a.count + b.count,
+    };
+}
 
 fn readConfigGroup(io: Io, alloc: std.mem.Allocator, dir_path: []const u8, prefix: []const u8, suffix: []const u8) !ConfigGroup {
     var dir = try Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
@@ -333,6 +358,9 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
     const dir = (try config.configDir(alloc, environ)) orelse "(not found)";
     const compiled_path = try config.compiledFile(alloc, environ);
     try stdout.interface.print("Config directory: {s}\n", .{dir});
+    if (try config.systemConfigDir(alloc, environ)) |sys_dir| {
+        try stdout.interface.print("System defaults:  {s}\n", .{sys_dir});
+    }
     try stdout.interface.print("Compiled rules:   {s}\n\n", .{compiled_path orelse "(none)"});
 
     try stdout.interface.writeAll(

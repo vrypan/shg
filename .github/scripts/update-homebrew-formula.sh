@@ -49,6 +49,9 @@ class Shg < Formula
   def install
     system "zig", "build", "--prefix", prefix
     (share/"shg/extras").install Dir["extras/*"]
+    (share/"shg/defaults").install "src/defaults/ignore.default.shg",
+                                   "src/defaults/match.default.shg",
+                                   "src/defaults/paths.default.shg"
   end
 
   test do

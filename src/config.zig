@@ -31,6 +31,12 @@ pub fn compiledFile(alloc: std.mem.Allocator, environ: *const std.process.Enviro
     return configFile(alloc, environ, compiled_filename);
 }
 
+pub fn systemConfigDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    const prefix = environ.get("HOMEBREW_PREFIX") orelse return null;
+    if (prefix.len == 0) return null;
+    return try std.fs.path.join(alloc, &.{ prefix, "share", "shg", "defaults" });
+}
+
 fn configFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, filename: []const u8) !?[]const u8 {
     const dir = (try configDir(alloc, environ)) orelse return null;
     defer alloc.free(dir);
