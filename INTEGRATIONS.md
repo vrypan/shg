@@ -10,7 +10,9 @@ output compact; `--level high` limits noise to the most critical findings only.
 
 ```sh
 if command -v shg &>/dev/null; then
-  shg scan --env=true --hist=true --one-line --level high 2>/dev/null || true
+  shg scan --env=true --hist=true --one-line --level high 2>/dev/null || _shg_rc=$?
+  [ "${_shg_rc:-0}" -eq 1 ] && echo "Run shg for more info"
+  unset _shg_rc
 fi
 ```
 
@@ -18,7 +20,9 @@ fi
 
 ```sh
 if command -v shg &>/dev/null; then
-  shg scan --env=true --hist=true --one-line --level high 2>/dev/null || true
+  shg scan --env=true --hist=true --one-line --level high 2>/dev/null || _shg_rc=$?
+  [ "${_shg_rc:-0}" -eq 1 ] && echo "Run shg for more info"
+  unset _shg_rc
 fi
 ```
 
@@ -26,7 +30,10 @@ fi
 
 ```fish
 if command -q shg
-    shg scan --env=true --hist=true --one-line --level high 2>/dev/null; or true
+    shg scan --env=true --hist=true --one-line --level high 2>/dev/null
+    if test $status -eq 1
+        echo "Run shg for more info"
+    end
 end
 ```
 

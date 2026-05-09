@@ -5,8 +5,8 @@ Scan shell history files for accidentally persisted secrets.
 ![](screenshot.png)
 
 > [!IMPORTANT]
-> `shg` will not make you 100% safe. 
-> But it will make you safer, and help you build some good shell habits.
+> `shg` will not make you 100% safe.  
+> But it will make you **safer**, and help you build some good shell habits.
 
 `shg` reads your shell history and flags entries that look like API keys,
 passwords, bearer tokens, credential URLs, and private keys. Secrets are
@@ -68,7 +68,6 @@ shg <command> [options]
 
 Commands:
   scan      Scan history files for secrets (default)
-  patterns  List all detection patterns and examples
   version   Print version
 ```
 
@@ -98,48 +97,6 @@ to disable a source.
 When history is piped via stdin, only stdin is scanned — env and history files
 are skipped unless explicitly requested with `--env=true` or `--hist=true`.
 
-**Examples:**
-
-```sh
-# Scan environment variables and all auto-detected history files
-shg scan
-
-# Scan only environment variables
-shg scan --hist false
-
-# Scan a specific file
-shg scan --env false --path ~/.bash_history
-
-# Scan multiple files
-shg scan --path ~/.zsh_history --path ~/.bash_history
-
-# Scan history from stdin
-cat ~/.zsh_history | shg scan --env false
-
-# Include low and medium findings
-shg scan --level low
-
-# Output as NDJSON (one JSON object per finding)
-shg scan --json
-
-# NDJSON piped to jq
-shg scan --json | jq 'select(.severity == "high")'
-
-# Compact one-line output (badge + source + command)
-shg scan --one-line
-
-# Machine-readable counts (H M L) for prompt integration
-shg scan --summary --hist false
-```
-
-> [!TIP]
-> Zsh may keep recent commands in memory before writing them to `$HISTFILE`.  
-> Use a shell helper if you want scans to include the latest interactive history
-> without forcing zsh to write the history file:  
->
-> `shg-scan() { fc -l 1 | shg scan "$@" }`
-
-
 **Exit codes:**
 
 | Code | Meaning |
@@ -154,23 +111,34 @@ This makes `shg` scriptable:
 shg scan --level high && echo "clean"
 ```
 
+> [!TIP]
+> Zsh may keep recent commands in memory before writing them to `$HISTFILE`.  
+> Use a shell helper if you want scans to include the latest interactive history
+> without forcing zsh to write the history file:  
+>
+> `shg-scan() { fc -l 1 | shg scan "$@" }`
+>
+> [INTEGRATIONS.md](INTEGRATIONS.md) also provides a snippet that will prevent
+> sensitive info from being written to history in the first place.
+
+For shell startup scans and pre-history hooks see [INTEGRATIONS.md](INTEGRATIONS.md).
+
 ## Detection
 
 `shg` combines pattern matching, Shannon entropy analysis, and heuristic
 scoring. Each candidate is scored on several signals; low-scoring results
 are silently dropped to reduce false positives.
 
-```
-$ shg patterns
+| Detector | What it matches |
+|---|---|
+| `inline_assign` | `VAR=value` with sensitive keywords |
+| `auth_header` | `Authorization: Bearer <token>`, `--password <val>` |
+| `credential_url` | `scheme://user:pass@host` |
+| `config_check` | compiled `match.*.shg` pattern match |
+| `private_key` | `-----BEGIN * KEY-----` and `AGE-SECRET-KEY-1` markers |
+| `ssh_key` | `ssh-rsa`, `ssh-ed25519`, `ecdsa-sha2-*`, FIDO2/sk public keys |
 
-  inline_assign     VAR=value with sensitive keywords
-  auth_header       Authorization: Bearer <token>, --password <val>
-  credential_url    scheme://user:pass@host
-  config_check      compiled match.*.shg pattern match
-  private_key       -----BEGIN * KEY----- markers
-  age_secret_key    AGE-SECRET-KEY-1... markers
-  ssh_key           ssh-rsa AAAA... public keys
-```
+Run `shg-config status` to list active detection patterns and rules.
 
 ### Default history paths
 
@@ -236,7 +204,7 @@ Each detection candidate is scored against a set of signals:
 | Known provider token format | +4 |
 | Private key marker | +6 |
 | Placeholder / test value | −3 |
-| Search command (grep, echo, …) | −2 |
+| Search command (grep, sed, …) | −2 |
 
 | Score | Severity |
 |---|---|
