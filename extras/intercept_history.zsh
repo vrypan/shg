@@ -1,3 +1,6 @@
+# Allow # comments in interactive shells (required for # SHGOK / # SHGNOK).
+setopt INTERACTIVE_COMMENTS
+
 #
 # It will check every command line before it is saved to history.
 # If shg considers it sensitive, it will still be executed, but 

@@ -83,6 +83,8 @@ echo 'source "$(brew --prefix)/share/shg/extras/intercept_history.zsh"' >> ~/.zs
 Otherwise, add to `~/.zshrc`:
 
 ```zsh
+setopt INTERACTIVE_COMMENTS
+
 zshaddhistory() {
     local cmd="${1%$'\n'}"
 
