@@ -62,7 +62,7 @@ end
 ```
 
 > **Note on performance.** Environment scanning is instant. History file
-> scanning is very fast, but adds a small startup delay proportional to history size.  
+> scanning is very fast, but adds a small startup delay proportional to history size.
 > If startup latency matters, use `--hist=false` to scan only the environment, or limit
 > the scope (ex: `--path ~/.zsh_history`) to scan a single file.
 
