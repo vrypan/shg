@@ -2,6 +2,58 @@ const std = @import("std");
 const Io = std.Io;
 const config = @import("config.zig");
 const rules = @import("rules.zig");
+const zecli = @import("cli");
+
+const commands = [_]zecli.CommandEntry{
+    .{ .name = "compile",  .description = "Compile all *.shg files into rules.bin" },
+    .{ .name = "defaults", .description = "Write default .shg config files [-y]" },
+    .{ .name = "discover", .description = "Find history files not yet configured" },
+    .{ .name = "ignore",   .description = "Add or remove a pattern in ignore.local.shg" },
+    .{ .name = "match",    .description = "Add or remove a pattern in match.local.shg" },
+    .{ .name = "status",   .description = "Show active rules and configuration" },
+};
+
+const root_spec = zecli.CommandSpec{
+    .name        = "shg-config",
+    .description = "Manage shg configuration.",
+    .usage       = "shg-config <command> [options]",
+    .extra_help  = "\nRun 'shg-config <command> --help' for command-specific options.\n",
+};
+
+const edit_flags = [_]zecli.FlagSpec{
+    .{ .name = "remove", .short = 'r', .value = .none, .description = "Remove the pattern instead of adding it" },
+};
+
+const edit_args = [_]zecli.ArgumentSpec{
+    .{ .name = "pattern", .description = "Pattern to add or remove", .required = true },
+};
+
+const ignore_spec = zecli.CommandSpec{
+    .name        = "ignore",
+    .description = "Add or remove a pattern in ignore.local.shg.",
+    .usage       = "shg-config ignore [-r] <pattern>",
+    .flags       = &edit_flags,
+    .arguments   = &edit_args,
+};
+
+const match_spec = zecli.CommandSpec{
+    .name        = "match",
+    .description = "Add or remove a pattern in match.local.shg.",
+    .usage       = "shg-config match [-r] <pattern>",
+    .flags       = &edit_flags,
+    .arguments   = &edit_args,
+};
+
+const status_args = [_]zecli.ArgumentSpec{
+    .{ .name = "group", .description = "Show only *.<group>.shg files", .required = false },
+};
+
+const status_spec = zecli.CommandSpec{
+    .name        = "status",
+    .description = "Show active configuration and compiled rules.",
+    .usage       = "shg-config status [<group>]",
+    .arguments   = &status_args,
+};
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -16,27 +68,24 @@ pub fn main(init: std.process.Init) !void {
     defer stderr.flush() catch {};
 
     const raw_args = try init.minimal.args.toSlice(alloc);
-    if (raw_args.len < 2 or std.mem.eql(u8, raw_args[1], "help") or
-        std.mem.eql(u8, raw_args[1], "--help") or std.mem.eql(u8, raw_args[1], "-h"))
-    {
-        try stdout.interface.writeAll(
-            \\Usage:
-            \\  shg-config compile
-            \\  shg-config defaults [-y]
-            \\  shg-config discover
-            \\  shg-config status
-            \\
-        );
+
+    if (raw_args.len < 2 or zecli.helpRequested(raw_args[1..2])) {
+        try zecli.printCommandHelp(alloc, &stdout.interface, root_spec);
+        try zecli.printCommandList(&stdout.interface, &commands);
         return;
     }
 
     const command = raw_args[1];
+    const subcmd_args = if (raw_args.len > 2) raw_args[2..] else &[_][:0]const u8{};
+
     if (!std.mem.eql(u8, command, "compile") and
         !std.mem.eql(u8, command, "defaults") and
         !std.mem.eql(u8, command, "discover") and
+        !std.mem.eql(u8, command, "ignore") and
+        !std.mem.eql(u8, command, "match") and
         !std.mem.eql(u8, command, "status"))
     {
-        try stderr.interface.writeAll("error: expected command 'compile', 'defaults', 'discover', or 'status'\n");
+        try stderr.interface.writeAll("error: unknown command; run 'shg-config --help' for usage\n");
         try stderr.flush();
         std.process.exit(2);
     }
@@ -46,8 +95,35 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (std.mem.eql(u8, command, "ignore") or std.mem.eql(u8, command, "match")) {
+        const spec = if (std.mem.eql(u8, command, "ignore")) ignore_spec else match_spec;
+        if (zecli.helpRequested(subcmd_args)) {
+            try zecli.printCommandHelp(alloc, &stdout.interface, spec);
+            return;
+        }
+        const parsed = zecli.parseCommand(alloc, &stdout.interface, subcmd_args, spec) catch |err| {
+            if (err == error.ReportedCliError) { stdout.flush() catch {}; std.process.exit(2); }
+            return err;
+        };
+        try runLocalEdit(io, alloc, init.environ_map, &stdout, &stderr, command,
+            parsed.positionals.items[0], parsed.present("remove"));
+        return;
+    }
+
     if (std.mem.eql(u8, command, "status")) {
-        try runStatus(io, alloc, init.environ_map, &stdout);
+        if (zecli.helpRequested(subcmd_args)) {
+            try zecli.printCommandHelp(alloc, &stdout.interface, status_spec);
+            return;
+        }
+        const parsed = zecli.parseCommand(alloc, &stdout.interface, subcmd_args, status_spec) catch |err| {
+            if (err == error.ReportedCliError) { stdout.flush() catch {}; std.process.exit(2); }
+            return err;
+        };
+        if (parsed.positionals.items.len > 0) {
+            try runStatusGroup(io, alloc, init.environ_map, &stdout, parsed.positionals.items[0]);
+        } else {
+            try runStatus(io, alloc, init.environ_map, &stdout);
+        }
         return;
     }
 
@@ -83,6 +159,16 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, command, "defaults")) {
+        if (try config.systemConfigDir(alloc, init.environ_map)) |sys_dir| {
+            if (dirExists(io, sys_dir)) {
+                try stdout.interface.print(
+                    "Default config files are provided by Homebrew at:\n  {s}\n\n" ++
+                    "To customise, add ignore.local.shg, match.local.shg, or paths.local.shg to:\n  {s}\n",
+                    .{ sys_dir, dir },
+                );
+                return;
+            }
+        }
         try writeDefaults(io, &stdout, default_files[0..], force_yes, true);
         return;
     }
@@ -420,6 +506,126 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
             }
         }
         if (found) try stdout.interface.writeByte('\n');
+    }
+}
+
+fn runLocalEdit(
+    io: Io,
+    alloc: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    stdout: *Io.File.Writer,
+    stderr: *Io.File.Writer,
+    kind: []const u8,
+    pattern: []const u8,
+    remove: bool,
+) !void {
+    const dir = (try config.configDir(alloc, environ)) orelse {
+        try stderr.interface.writeAll("error: cannot determine config directory; set XDG_CONFIG_HOME or HOME\n");
+        try stderr.flush();
+        std.process.exit(2);
+    };
+    Io.Dir.createDirPath(.cwd(), io, dir) catch |err| {
+        try stderr.interface.print("error: cannot create config directory {s}: {t}\n", .{ dir, err });
+        try stderr.flush();
+        std.process.exit(2);
+    };
+
+    const filename = try std.mem.concat(alloc, u8, &.{ kind, ".local.shg" });
+    const path = try std.fs.path.join(alloc, &.{ dir, filename });
+
+    if (remove) {
+        if (try removeLine(io, alloc, path, pattern)) {
+            try stdout.interface.print("removed '{s}' from {s}\n", .{ pattern, path });
+        } else {
+            try stdout.interface.print("'{s}' not found in {s}\n", .{ pattern, path });
+            return;
+        }
+    } else {
+        try appendLine(io, alloc, path, pattern);
+        try stdout.interface.print("added '{s}' to {s}\n", .{ pattern, path });
+    }
+    try stdout.interface.writeAll("Run 'shg-config compile' to apply changes.\n");
+}
+
+fn appendLine(io: Io, alloc: std.mem.Allocator, path: []const u8, line: []const u8) !void {
+    const f = try Io.Dir.createFileAbsolute(io, path, .{ .truncate = false });
+    defer f.close(io);
+    const offset = try f.length(io);
+    const text = try std.mem.concat(alloc, u8, &.{ line, "\n" });
+    try f.writePositionalAll(io, text, offset);
+}
+
+fn removeLine(io: Io, alloc: std.mem.Allocator, path: []const u8, pattern: []const u8) !bool {
+    const content = readFile(io, alloc, path) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+
+    var out: std.ArrayList(u8) = .empty;
+    var removed = false;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (!removed and std.mem.eql(u8, trimmed, pattern)) {
+            removed = true;
+            continue;
+        }
+        try out.appendSlice(alloc, line);
+        try out.append(alloc, '\n');
+    }
+    if (!removed) return false;
+
+    const text = std.mem.trimEnd(u8, out.items, "\n");
+    var final: std.ArrayList(u8) = .empty;
+    try final.appendSlice(alloc, text);
+    if (text.len > 0) try final.append(alloc, '\n');
+    try writeFile(io, path, final.items);
+    return true;
+}
+
+fn runStatusGroup(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, stdout: *Io.File.Writer, group: []const u8) !void {
+    const suffix = try std.mem.concat(alloc, u8, &.{ ".", group, ".shg" });
+
+    if (try config.systemConfigDir(alloc, environ)) |sys_dir| {
+        if (dirExists(io, sys_dir)) try printGroupDir(io, alloc, sys_dir, suffix, stdout);
+    }
+    if (try config.configDir(alloc, environ)) |dir| {
+        try printGroupDir(io, alloc, dir, suffix, stdout);
+    }
+}
+
+fn printGroupDir(io: Io, alloc: std.mem.Allocator, dir_path: []const u8, suffix: []const u8, stdout: *Io.File.Writer) !void {
+    var dir = Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |name| alloc.free(name);
+        names.deinit(alloc);
+    }
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file and entry.kind != .unknown) continue;
+        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
+        try names.append(alloc, try alloc.dupe(u8, entry.name));
+    }
+    std.mem.sort([]const u8, names.items, {}, lessThanString);
+
+    for (names.items) |name| {
+        const path = try std.fs.path.join(alloc, &.{ dir_path, name });
+        try stdout.interface.print("{s}:\n", .{path});
+        const content = readFile(io, alloc, path) catch continue;
+        var has_content = false;
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0 or trimmed[0] == '#') continue;
+            try stdout.interface.print("  {s}\n", .{trimmed});
+            has_content = true;
+        }
+        if (!has_content) try stdout.interface.writeAll("  (empty)\n");
+        try stdout.interface.writeByte('\n');
     }
 }
 

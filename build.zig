@@ -38,6 +38,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    config_mod.addImport("cli", zecli.module("cli"));
     const config_exe = b.addExecutable(.{
         .name = "shg-config",
         .root_module = config_mod,
