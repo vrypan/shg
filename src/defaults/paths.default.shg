@@ -13,3 +13,6 @@
 ~/.irb_history
 ~/.pry_history
 ~/.Rhistory
+# AI agent session/conversation logs
+~/.claude/projects/
+~/.config/shell_gpt/chat_cache/

@@ -13,6 +13,7 @@ const hints = @import("hints.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
+const jsonl_parser = @import("parsers/jsonl.zig");
 
 const detect_keys = @import("detect/private_keys.zig");
 const detect_assign = @import("detect/inline_assign.zig");
@@ -157,6 +158,8 @@ fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.
 fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
     if (std.mem.indexOf(u8, path, "fish_history") != null)
         return fish_parser.parse(reader, path, alloc);
+    if (std.mem.endsWith(u8, path, ".jsonl"))
+        return jsonl_parser.parse(reader, path, alloc);
     // The zsh parser also accepts plain one-command-per-line histories. Using it
     // as the default preserves zsh extended metadata for explicit --path scans.
     return zsh_parser.parse(reader, path, alloc);

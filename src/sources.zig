@@ -14,7 +14,12 @@ pub fn discover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.En
 
         const path = try expandPath(alloc, environ, rule.pattern);
         if (path) |resolved| {
-            try appendExistingPath(io, alloc, &results, resolved);
+            if (isDirectory(io, resolved)) {
+                try appendDirectoryFiles(io, alloc, &results, resolved);
+                alloc.free(resolved);
+            } else {
+                try appendExistingPath(io, alloc, &results, resolved);
+            }
         }
     }
 
@@ -55,6 +60,25 @@ fn appendExistingPath(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList(
         }
     }
     try results.append(alloc, path);
+}
+
+// Recursively collect all files under dir_path. Does not take ownership of dir_path.
+fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), dir_path: []const u8) !void {
+    var dir = Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        const child = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
+        switch (entry.kind) {
+            .file, .unknown => try appendExistingPath(io, alloc, results, child),
+            .directory => {
+                try appendDirectoryFiles(io, alloc, results, child);
+                alloc.free(child);
+            },
+            else => alloc.free(child),
+        }
+    }
 }
 
 test "discover expands configured home paths" {
@@ -150,5 +174,11 @@ test "discover deduplicates HISTFILE and configured paths" {
 fn fileExists(io: Io, path: []const u8) bool {
     const f = Io.Dir.openFileAbsolute(io, path, .{}) catch return false;
     f.close(io);
+    return true;
+}
+
+fn isDirectory(io: Io, path: []const u8) bool {
+    const d = Io.Dir.openDirAbsolute(io, path, .{ .iterate = false }) catch return false;
+    d.close(io);
     return true;
 }
