@@ -26,6 +26,23 @@ pub fn discover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.En
     return results.toOwnedSlice(alloc);
 }
 
+/// Expand explicit --path arguments: a directory is walked recursively into
+/// its files, a plain file is kept as-is. A leading ~/ is expanded. Missing
+/// paths are dropped, mirroring the scan loop which skips unreadable files.
+pub fn expandExplicitPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, paths: []const []const u8) ![][]const u8 {
+    var results: std.ArrayList([]const u8) = .empty;
+    for (paths) |raw| {
+        const resolved = (try expandPath(alloc, environ, raw)) orelse continue;
+        if (isDirectory(io, resolved)) {
+            try appendDirectoryFiles(io, alloc, &results, resolved);
+            alloc.free(resolved);
+        } else {
+            try appendExistingPath(io, alloc, &results, resolved);
+        }
+    }
+    return results.toOwnedSlice(alloc);
+}
+
 fn appendEnvHistoryPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, results: *std.ArrayList([]const u8)) !void {
     const env_vars = [_][]const u8{
         "HISTFILE",
@@ -81,6 +98,26 @@ fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayLis
     }
 }
 
+test "expandExplicitPaths keeps existing files and drops missing ones" {
+    const alloc = std.testing.allocator;
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+
+    const input = [_][]const u8{ "/dev/null", "/nonexistent/shg/path/xyz" };
+    const paths = try expandExplicitPaths(std.testing.io, alloc, &env, &input);
+    defer {
+        for (paths) |p| alloc.free(p);
+        alloc.free(paths);
+    }
+
+    if (fileExists(std.testing.io, "/dev/null")) {
+        try std.testing.expectEqual(@as(usize, 1), paths.len);
+        try std.testing.expectEqualStrings("/dev/null", paths[0]);
+    } else {
+        try std.testing.expectEqual(@as(usize, 0), paths.len);
+    }
+}
+
 test "discover expands configured home paths" {
     const alloc = std.testing.allocator;
     var env = std.process.Environ.Map.init(alloc);
@@ -91,7 +128,7 @@ test "discover expands configured home paths" {
     defer alloc.free(cache_bytes);
     const cache = try rules.Cache.init(cache_bytes);
 
-    const paths = try discover(.blocking, alloc, &env, cache);
+    const paths = try discover(std.testing.io, alloc, &env, cache);
     defer {
         for (paths) |path| alloc.free(path);
         alloc.free(paths);
@@ -109,13 +146,13 @@ test "discover keeps existing configured paths" {
     var env = std.process.Environ.Map.init(alloc);
     defer env.deinit();
 
-    const paths = try discover(.blocking, alloc, &env, cache);
+    const paths = try discover(std.testing.io, alloc, &env, cache);
     defer {
         for (paths) |path| alloc.free(path);
         alloc.free(paths);
     }
 
-    if (fileExists(.blocking, "/dev/null")) {
+    if (fileExists(std.testing.io, "/dev/null")) {
         try std.testing.expectEqual(@as(usize, 1), paths.len);
         try std.testing.expectEqualStrings("/dev/null", paths[0]);
     } else {
@@ -133,13 +170,13 @@ test "discover includes HISTFILE" {
     defer env.deinit();
     try env.put("HISTFILE", "/dev/null");
 
-    const paths = try discover(.blocking, alloc, &env, cache);
+    const paths = try discover(std.testing.io, alloc, &env, cache);
     defer {
         for (paths) |path| alloc.free(path);
         alloc.free(paths);
     }
 
-    if (fileExists(.blocking, "/dev/null")) {
+    if (fileExists(std.testing.io, "/dev/null")) {
         try std.testing.expectEqual(@as(usize, 1), paths.len);
         try std.testing.expectEqualStrings("/dev/null", paths[0]);
     } else {
@@ -157,13 +194,13 @@ test "discover deduplicates HISTFILE and configured paths" {
     defer env.deinit();
     try env.put("HISTFILE", "/dev/null");
 
-    const paths = try discover(.blocking, alloc, &env, cache);
+    const paths = try discover(std.testing.io, alloc, &env, cache);
     defer {
         for (paths) |path| alloc.free(path);
         alloc.free(paths);
     }
 
-    if (fileExists(.blocking, "/dev/null")) {
+    if (fileExists(std.testing.io, "/dev/null")) {
         try std.testing.expectEqual(@as(usize, 1), paths.len);
         try std.testing.expectEqualStrings("/dev/null", paths[0]);
     } else {

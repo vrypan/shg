@@ -97,7 +97,7 @@ fn run(init: std.process.Init) !void {
     // Scan history paths when: not piped, OR piped but --hist was explicitly requested.
     if (args.scan_hist and (!stdin_is_piped or args.hist_explicit)) {
         const paths: []const []const u8 = if (args.paths.len > 0)
-            args.paths
+            try sources.expandExplicitPaths(io, arena_alloc, init.environ_map, args.paths)
         else
             try sources.discover(io, arena_alloc, init.environ_map, rules_cache.?);
 
@@ -358,6 +358,7 @@ test {
     _ = @import("scorer.zig");
     _ = @import("config.zig");
     _ = @import("rules.zig");
+    _ = @import("sources.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");

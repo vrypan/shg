@@ -28,7 +28,7 @@ const commands = [_]zecli.CommandEntry{
 };
 
 const scan_flags = [_]zecli.FlagSpec{
-    .{ .name = "path",               .short = 'p', .value = .string, .value_name = "FILE",  .description = "History file to scan",  .repeatable = true },
+    .{ .name = "path",               .short = 'p', .value = .string, .value_name = "PATH",  .description = "History file or directory to scan",  .repeatable = true },
     .{ .name = "env",                              .value = .bool_optional,                  .description = "Scan environment variables", .default_value = "true" },
     .{ .name = "hist",                             .value = .bool_optional,                  .description = "Scan history files",          .default_value = "true" },
     .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },

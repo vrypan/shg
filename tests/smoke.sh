@@ -72,6 +72,17 @@ printf '%s\n' "$output" | grep -q "$home/.zsh_history"
 printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS configured history paths"
 
+say "TEST --path accepts a directory and walks it"
+walkdir=$tmp/walk/nested
+mkdir -p "$walkdir"
+printf '%s\n' 'ls -la' > "$tmp/walk/clean_history"
+printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$walkdir/session.jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tmp/walk"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$walkdir/session.jsonl"
+printf '%s\n' "$output" | grep -q '\[known_token\]'
+say "PASS --path accepts a directory and walks it"
+
 say "TEST environment history path"
 histfile=$tmp/custom_history
 printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$histfile"

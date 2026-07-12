@@ -77,7 +77,7 @@ Commands:
 shg scan [options]
 
 Options:
-  -p, --path <FILE>            History file to scan [repeatable]
+  -p, --path <PATH>            History file or directory to scan [repeatable]
       --env[=BOOL]             Scan environment variables [default: true]
       --hist[=BOOL]            Scan history files [default: true]
       --level <LEVEL>          low|medium|high [default: high]
@@ -93,6 +93,14 @@ By default, `shg scan` checks both environment variables and history files.
 With no `--path` flags, `shg` scans existing paths from `paths.*.shg` plus the
 history file named by `HISTFILE`, when set. Use `--env false` or `--hist false`
 to disable a source.
+
+A `--path` argument may be a file or a directory. Directories are walked
+recursively and every file inside is scanned, which is handy for one-off scans
+of a tree such as AI agent session logs:
+
+```sh
+shg scan --env=false --path ~/.claude/projects
+```
 
 When history is piped via stdin, only stdin is scanned — env and history files
 are skipped unless explicitly requested with `--env=true` or `--hist=true`.
