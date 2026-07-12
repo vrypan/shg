@@ -58,6 +58,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     var total: usize = 0;
     var files_with: usize = 0;
     var quit = false;
+    var first_prompt = true;
 
     for (files) |path| {
         if (quit) break;
@@ -82,8 +83,11 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         for (cands) |c| {
             const decision = if (args.yes)
                 Decision.remove
-            else
-                try promptRemove(alloc, &stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
+            else blk: {
+                if (!first_prompt) try stdout.interface.writeByte('\n');
+                first_prompt = false;
+                break :blk try promptRemove(alloc, &stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
+            };
             switch (decision) {
                 .keep => {},
                 .remove => try spans.append(alloc, .{ c.start, c.end }),
@@ -131,6 +135,7 @@ fn promptRemove(alloc: std.mem.Allocator, stdout: *Io.File.Writer, stdin: *Io.Re
         else
             .keep;
 
+    if (!is_tty) try w.writeByte('\n');
     if (is_tty and !redacted) {
         // Cursor is one row below the prompt: up 2 to the entry row, clear it,
         // reprint the masked entry + outcome, back down 2.

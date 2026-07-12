@@ -306,6 +306,8 @@ if printf '%s\n' "$output" | grep -q "$quit_tok_c"; then
     printf '%s\n' "fix q continued after quit" >&2
     exit 1
 fi
+printf '%s\n' "$output" | grep -q 'Remove this entry? \[y/N/q\] '
+printf '%s\n' "$output" | grep -q '^$'
 say "PASS shg fix interactive q applies confirmed removals and stops"
 
 say "TEST shg fix --yes removes an entire fish history block"
