@@ -11,6 +11,7 @@ const rules = @import("rules.zig");
 const detect = @import("detect.zig");
 const agents = @import("agents.zig");
 const agent_formats = @import("agent_formats.zig");
+const fix_mod = @import("fix.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
@@ -60,6 +61,11 @@ fn run(init: std.process.Init) !void {
             try stderr.flush();
         }
         try agents.run(init, args);
+        return;
+    }
+
+    if (args.subcommand == .fix) {
+        try fix_mod.run(init, args);
         return;
     }
 
@@ -267,6 +273,7 @@ test {
     _ = @import("detect.zig");
     _ = @import("agent_formats.zig");
     _ = @import("agents.zig");
+    _ = @import("fix.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");

@@ -5,7 +5,7 @@ const build_options = @import("build_options");
 
 pub const version = build_options.version;
 
-pub const Subcommand = enum { scan, history, env, deep, agents, help, version };
+pub const Subcommand = enum { scan, history, env, deep, agents, fix, help, version };
 
 pub const Args = struct {
     subcommand: Subcommand,
@@ -21,6 +21,8 @@ pub const Args = struct {
     all_content: bool,
     thorough: bool,
     read_stdin: bool,
+    yes: bool,
+    dry_run: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -28,6 +30,7 @@ const commands = [_]zecli.CommandEntry{
     .{ .name = "history", .description = "Scan command histories (shell, REPLs, agents)" },
     .{ .name = "env",     .description = "Scan environment variables"                },
     .{ .name = "deep",    .description = "Scan AI agent transcripts (per session)"    },
+    .{ .name = "fix",     .description = "Remove flagged secrets from history files"  },
     .{ .name = "version", .description = "Print version"                            },
 };
 
@@ -114,6 +117,31 @@ const env_spec = zecli.CommandSpec{
     .flags       = &env_flags,
 };
 
+// fix: remove flagged secrets from history files. --redacted defaults to
+// false here (the inverse of scan): the prompt shows the full value so the
+// user can judge and copy it before deleting.
+const fix_flags = [_]zecli.FlagSpec{
+    .{ .name = "path",     .short = 'p', .value = .string, .value_name = "PATH",  .description = "History file or directory to fix", .repeatable = true },
+    .{ .name = "level",                  .value = .string, .value_name = "LEVEL", .description = "low|medium|high", .default_value = "high" },
+    .{ .name = "yes",      .short = 'y', .value = .bool_optional,                  .description = "Remove all flagged entries without prompting", .default_value = "false" },
+    .{ .name = "dry-run",                .value = .bool_optional,                  .description = "List what would be removed; change nothing", .default_value = "false" },
+    .{ .name = "redacted",               .value = .bool_optional,                  .description = "Redact the shown secret (default: shown in full)", .default_value = "false" },
+};
+
+const fix_spec = zecli.CommandSpec{
+    .name        = "fix",
+    .description = "Remove flagged secrets from history files (interactive).",
+    .usage       = "shg fix [options]",
+    .flags       = &fix_flags,
+    .extra_help  =
+        \\
+        \\Shows each flagged entry and asks before removing it. The write is
+        \\atomic and no backup is made (a backup would replicate the secret).
+        \\Use --dry-run to preview, --yes to remove all without prompting.
+        \\
+    ,
+};
+
 const root_spec = zecli.CommandSpec{
     .name        = "shg",
     .description = "Scan histories, environment, and AI agent transcripts for secrets.",
@@ -148,6 +176,9 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             subcmd_args = if (raw.len > 2) raw[2..] else &.{};
         } else if (std.mem.eql(u8, first, "agents")) {
             subcmd = .agents;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "fix")) {
+            subcmd = .fix;
             subcmd_args = if (raw.len > 2) raw[2..] else &.{};
         } else if (std.mem.eql(u8, first, "version")) {
             subcmd = .version;
@@ -213,6 +244,35 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
             }
             const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, deep_spec);
             return buildDeepArgs(alloc, writer, parsed, .agents);
+        },
+        .fix => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, fix_spec);
+                return defaultArgs(.help);
+            }
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, fix_spec);
+
+            var paths: std.ArrayList([]const u8) = .empty;
+            for (parsed.flags.items) |flag| {
+                if (std.mem.eql(u8, flag.name, "path")) {
+                    if (flag.value) |v| try paths.append(alloc, v);
+                }
+            }
+
+            const level_str = parsed.last("level") orelse "high";
+            const level = parseSeverity(level_str) orelse {
+                try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
+                return error.ReportedCliError;
+            };
+
+            var args = defaultArgs(.fix);
+            args.paths = try paths.toOwnedSlice(alloc);
+            args.level = level;
+            // --redacted defaults to false for fix (inverse of scan).
+            args.redacted = zecli.parseBool(parsed.last("redacted") orelse "false") catch unreachable;
+            args.yes = zecli.parseBool(parsed.last("yes") orelse "false") catch unreachable;
+            args.dry_run = zecli.parseBool(parsed.last("dry-run") orelse "false") catch unreachable;
+            return args;
         },
     }
 }
@@ -296,6 +356,8 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .all_content = false,
         .thorough = false,
         .read_stdin = false,
+        .yes = false,
+        .dry_run = false,
     };
 }
 
