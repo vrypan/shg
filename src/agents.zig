@@ -29,6 +29,11 @@ const FileResult = struct {
     aggs: []Agg,
 };
 
+const ScanOutcome = struct {
+    result: ?FileResult,
+    malformed: usize,
+};
+
 pub fn run(init: std.process.Init, args: cli.Args) !void {
     const io = init.io;
     const alloc = init.arena.allocator();
@@ -57,8 +62,14 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 
     var results: std.ArrayList(FileResult) = .empty;
     var file_count: usize = 0;
+    var malformed_total: usize = 0;
     for (files) |path| {
-        if (try scanFile(io, alloc, path, args, cache)) |res| {
+        const outcome = try scanFile(io, alloc, path, args, cache);
+        if (outcome.malformed > 0) {
+            malformed_total += outcome.malformed;
+            try stderr.interface.print("shg: warning: {s}: skipped {d} malformed JSONL record(s)\n", .{ path, outcome.malformed });
+        }
+        if (outcome.result) |res| {
             try results.append(alloc, res);
             file_count += 1;
         }
@@ -75,14 +86,17 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         try reportHuman(&stdout, results.items, total_secrets, file_count, color);
     }
     try stdout.flush();
+    try stderr.flush();
 
+    if (malformed_total > 0) std.process.exit(2);
     if (total_secrets > 0) std.process.exit(1);
 }
 
-fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, cache: rules.Cache) !?FileResult {
-    const bytes = readFile(io, alloc, path) catch return null;
+fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, cache: rules.Cache) !ScanOutcome {
+    const bytes = try readFile(io, alloc, path);
     const format = formats.formatForPath(path);
-    const pieces = try formats.extract(format, bytes, alloc);
+    var malformed: usize = 0;
+    const pieces = try formats.extractCounting(format, bytes, alloc, &malformed);
 
     var map = std.StringHashMap(Agg).init(alloc);
 
@@ -134,14 +148,17 @@ fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, 
         }
     }
 
-    if (map.count() == 0) return null;
+    if (map.count() == 0) return .{ .result = null, .malformed = malformed };
 
     var aggs: std.ArrayList(Agg) = .empty;
     var it = map.valueIterator();
     while (it.next()) |v| try aggs.append(alloc, v.*);
     std.mem.sort(Agg, aggs.items, {}, higherSeverityFirst);
 
-    return .{ .path = path, .aggs = try aggs.toOwnedSlice(alloc) };
+    return .{
+        .result = .{ .path = path, .aggs = try aggs.toOwnedSlice(alloc) },
+        .malformed = malformed,
+    };
 }
 
 fn higherSeverityFirst(_: void, a: Agg, b: Agg) bool {

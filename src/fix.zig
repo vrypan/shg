@@ -20,6 +20,11 @@ const Candidate = struct {
     redacted: []const u8,
 };
 
+const FileSnapshot = struct {
+    bytes: []const u8,
+    permissions: Io.File.Permissions,
+};
+
 const Decision = enum {
     keep,
     remove,
@@ -62,8 +67,8 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 
     for (files) |path| {
         if (quit) break;
-        const bytes = readFile(io, alloc, path) catch continue;
-        const cands = try collectCandidates(bytes, path, alloc, cache, args.level);
+        const snapshot = readSnapshot(io, alloc, path) catch continue;
+        const cands = try collectCandidates(snapshot.bytes, path, alloc, cache, args.level);
         if (cands.len == 0) continue;
         any_candidate = true;
         files_with += 1;
@@ -98,7 +103,14 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
             }
         }
         if (spans.items.len == 0) continue;
-        try rewriteFile(io, alloc, path, bytes, spans.items);
+        rewriteFile(io, alloc, path, snapshot, spans.items) catch |err| {
+            if (err == error.FileChanged) {
+                try stderr.interface.print("shg: {s} changed while confirming removals; no changes applied\n", .{path});
+                try stderr.flush();
+                return error.ReportedFixError;
+            }
+            return err;
+        };
         const noun = if (spans.items.len == 1) "entry" else "entries";
         try stdout.interface.print("Removed {d} {s} from {s}.\n", .{ spans.items.len, noun, path });
     }
@@ -166,11 +178,20 @@ fn fishSpanEnd(lines: []const []const u8, start: usize) usize {
     return end;
 }
 
+fn zshSpan(lines: []const []const u8, line: usize) [2]usize {
+    var start = line;
+    while (start > 1 and std.mem.endsWith(u8, lines[start - 2], "\\")) start -= 1;
+
+    var end = line;
+    while (end < lines.len and std.mem.endsWith(u8, lines[end - 1], "\\")) end += 1;
+    return .{ start, end };
+}
+
 // Rewrite `path` with the given 1-based inclusive line spans removed, via an
 // atomic temp-file + rename. No backup is made (it would replicate the secret);
 // the temp file is deleted on any error before the rename completes.
-fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []const u8, spans: []const [2]usize) !void {
-    const content = try removeLines(alloc, bytes, spans);
+fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, snapshot: FileSnapshot, spans: []const [2]usize) !void {
+    const content = try removeLines(alloc, snapshot.bytes, spans);
 
     // Temp file in the same directory as the target so the rename is an atomic
     // same-filesystem move. Create it exclusively so concurrent runs do not
@@ -179,7 +200,10 @@ fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []cons
     var attempt: usize = 0;
     while (attempt < 100) : (attempt += 1) {
         const tmp = try std.fmt.allocPrint(alloc, "{s}.shg-tmp.{d}.{d}", .{ path, stamp, attempt });
-        const f = Io.Dir.createFileAbsolute(io, tmp, .{ .exclusive = true }) catch |err| switch (err) {
+        const f = Io.Dir.createFileAbsolute(io, tmp, .{
+            .exclusive = true,
+            .permissions = snapshot.permissions,
+        }) catch |err| switch (err) {
             error.PathAlreadyExists => continue,
             else => return err,
         };
@@ -190,12 +214,24 @@ fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []cons
         var writer = f.writerStreaming(io, &wbuf);
         try writer.interface.writeAll(content);
         try writer.flush();
+        try f.setPermissions(io, snapshot.permissions);
+        try f.sync(io);
+
+        // The shell may append history while the user is answering prompts.
+        // Refuse to replace a changed file instead of discarding new data.
+        const latest = try readFile(io, alloc, path);
+        try ensureUnchanged(snapshot.bytes, latest);
+
         f.close(io);
         close_file = false;
         try Io.Dir.renameAbsolute(tmp, path, io);
         return;
     }
     return error.PathAlreadyExists;
+}
+
+fn ensureUnchanged(original: []const u8, current: []const u8) !void {
+    if (!std.mem.eql(u8, original, current)) return error.FileChanged;
 }
 
 // Rebuild file bytes with the given 1-based inclusive line spans removed,
@@ -229,6 +265,11 @@ test "removeLines removes a middle line and preserves the trailing newline" {
     try std.testing.expectEqualStrings("a\nc\n", out);
 }
 
+test "ensureUnchanged rejects concurrent history updates" {
+    try ensureUnchanged("original\n", "original\n");
+    try std.testing.expectError(error.FileChanged, ensureUnchanged("original\n", "original\nnew command\n"));
+}
+
 test "removeLines without a trailing newline" {
     const alloc = std.testing.allocator;
     const out = try removeLines(alloc, "a\nb\nc", &.{.{ 2, 2 }});
@@ -253,6 +294,19 @@ test "fishSpanEnd covers the cmd line plus indented continuations" {
 test "fishSpanEnd is the start line when there is no continuation" {
     const lines = [_][]const u8{ "- cmd: x", "- cmd: y" };
     try std.testing.expectEqual(@as(usize, 1), fishSpanEnd(&lines, 1));
+}
+
+test "zshSpan covers a complete backslash-continued entry" {
+    const lines = [_][]const u8{
+        ": 1715000000:0;printf \\",
+        "ghp_example \\",
+        "done",
+        "next-command",
+    };
+    try std.testing.expectEqual([2]usize{ 1, 3 }, zshSpan(&lines, 1));
+    try std.testing.expectEqual([2]usize{ 1, 3 }, zshSpan(&lines, 2));
+    try std.testing.expectEqual([2]usize{ 1, 3 }, zshSpan(&lines, 3));
+    try std.testing.expectEqual([2]usize{ 4, 4 }, zshSpan(&lines, 4));
 }
 
 test "singleLine collapses control characters to spaces" {
@@ -303,25 +357,28 @@ fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocat
         }
         if (!flagged) continue;
 
+        // A finding on any continuation line removes the complete logical
+        // history entry, including zsh metadata and fish continuation fields.
+        const span = if (is_fish)
+            [2]usize{ e.line, fishSpanEnd(lines.items, e.line) }
+        else
+            zshSpan(lines.items, e.line);
+
         // Dedup entries that map to the same physical start line (e.g. two JSON
-        // string leaves on one line): the whole line is removed once.
+        // string leaves on one line): the whole logical entry is removed once.
         var dup = false;
         for (seen_start.items) |s| {
-            if (s == e.line) {
+            if (s == span[0]) {
                 dup = true;
                 break;
             }
         }
         if (dup) continue;
-        try seen_start.append(alloc, e.line);
-
-        // Span: one line, or a fish `- cmd:` block plus its indented
-        // continuation lines.
-        const end = if (is_fish) fishSpanEnd(lines.items, e.line) else e.line;
+        try seen_start.append(alloc, span[0]);
 
         try cands.append(alloc, .{
-            .start = e.line,
-            .end = end,
+            .start = span[0],
+            .end = span[1],
             .full = try singleLine(alloc, e.command),
             .redacted = try singleLine(alloc, red),
         });
@@ -337,13 +394,33 @@ fn singleLine(alloc: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out;
 }
 
-fn readFile(io: Io, alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
+fn readSnapshot(io: Io, alloc: std.mem.Allocator, path: []const u8) !FileSnapshot {
     const file = try Io.Dir.openFileAbsolute(io, path, .{});
     defer file.close(io);
     const stat = try file.stat(io);
     var read_buf: [8192]u8 = undefined;
     var reader = file.reader(io, &read_buf);
-    return try reader.interface.readAlloc(alloc, @intCast(stat.size));
+    return .{
+        .bytes = try reader.interface.readAlloc(alloc, @intCast(stat.size)),
+        .permissions = stat.permissions,
+    };
+}
+
+fn readFile(io: Io, alloc: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const file = try Io.Dir.openFileAbsolute(io, path, .{});
+    defer file.close(io);
+    const before = try file.stat(io);
+    var read_buf: [8192]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const bytes = try reader.interface.readAlloc(alloc, @intCast(before.size));
+    const after = try file.stat(io);
+    if (before.inode != after.inode or
+        before.size != after.size or
+        before.mtime.toNanoseconds() != after.mtime.toNanoseconds())
+    {
+        return error.FileChanged;
+    }
+    return bytes;
 }
 
 fn loadRules(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?rules.Cache {

@@ -21,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
     run(init) catch |err| {
         var err_buf: [4096]u8 = undefined;
         var stderr = Io.File.stderr().writerStreaming(init.io, &err_buf);
-        stderr.interface.print("shg: {t}\n", .{err}) catch {};
+        if (err != error.ReportedFixError) stderr.interface.print("shg: {t}\n", .{err}) catch {};
         stderr.flush() catch {};
         std.process.exit(2);
     };

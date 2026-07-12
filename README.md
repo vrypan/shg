@@ -122,6 +122,10 @@ of a tree such as AI agent session logs:
 shg scan --env=false --path ~/.claude/projects
 ```
 
+Explicit paths are strict: a missing or unreadable `--path` is an error and
+exits with code 2. Auto-discovered paths remain best-effort because configured
+history files may legitimately not exist on every machine.
+
 To scan history piped on stdin, pass `--stdin` explicitly — there is no
 auto-detection, so a stray pipe never silently suppresses the normal scan. To
 scan *only* the piped input, disable the other sources:
@@ -187,12 +191,15 @@ Use `--dry-run` to preview without changing files. At the prompt, answer `y` to
 remove the entry, Enter or `n` to keep it, or `q` to apply already confirmed
 removals and stop.
 
-When an entry is removed, `shg fix` rewrites the file through an atomic temp
-file and rename. It intentionally creates no backup, because a backup would be
-another plaintext copy of the secret. `--yes` skips prompts and prints only
-per-file counts, never the entries themselves. `fix` is history-only; it does
-not edit environment variables, stdin, or `deep` transcript files, and it does
-not rotate credentials.
+When an entry is removed, `shg fix` rewrites the file through a synchronized
+temporary file and atomic rename, preserving the original permissions. It
+removes complete fish blocks and backslash-continued zsh entries. If the shell
+changes the history file while you are confirming removals, `shg fix` aborts
+instead of replacing the newer contents. It intentionally creates no backup,
+because a backup would be another plaintext copy of the secret. `--yes` skips
+prompts and prints only per-file counts, never the entries themselves. `fix` is
+history-only; it does not edit environment variables, stdin, or `deep`
+transcript files, and it does not rotate credentials.
 
 ### deep
 
@@ -238,6 +245,10 @@ only the high-confidence detectors (known provider tokens, private/SSH keys,
 and your own `match` patterns) fire. Pass `--thorough` to run every detector
 (much noisier on code). `--all-content` and `--thorough` are independent:
 one widens *what text* is scanned, the other *which detectors* count.
+
+Malformed JSONL records are reported as warnings and make the command exit with
+code 2. Other valid records are still scanned, but the result is not presented
+as a complete clean scan.
 
 With no `--path`, `shg deep` scans the locations listed in `paths.deep.*.shg`
 (by default `~/.claude/projects` and `~/.codex/sessions`). It never crawls the
@@ -411,9 +422,9 @@ re-run after any config change.
 ```
 shg-config defaults [-y]
 ```
-Write the three default `.shg` files (`ignore.default.shg`, `match.default.shg`,
-`paths.default.shg`). Existing files prompt before overwrite; use `-y` to
-overwrite without prompting.
+Write the four default `.shg` files (`ignore.default.shg`, `match.default.shg`,
+`paths.default.shg`, and `paths.deep.default.shg`). Existing files prompt before
+overwrite; use `-y` to overwrite without prompting.
 
 ```
 shg-config discover
@@ -428,9 +439,10 @@ afterwards to apply the changes.
 - **No telemetry.** Nothing is collected or sent.
 - **Redaction on by default.** Secrets are never printed in full unless
   `--redacted=false` is explicitly passed.
-- **Careful writes.** `shg fix` can edit history files, but only by removing
-  confirmed entries through an atomic temp-file rewrite. It creates no backups
-  because a backup would replicate the secret.
+- **Careful writes.** `shg fix` preserves file permissions, synchronizes the
+  replacement, detects concurrent changes, and removes only complete confirmed
+  entries through an atomic temp-file rewrite. It creates no backups because a
+  backup would replicate the secret.
 
 ## License
 

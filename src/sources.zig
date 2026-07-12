@@ -57,12 +57,12 @@ pub fn deepPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.E
 pub fn expandExplicitPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, paths: []const []const u8) ![][]const u8 {
     var results: std.ArrayList([]const u8) = .empty;
     for (paths) |raw| {
-        const resolved = (try expandPath(alloc, environ, raw)) orelse continue;
+        const resolved = (try expandPath(alloc, environ, raw)) orelse return error.InvalidPath;
         if (isDirectory(io, resolved)) {
-            try appendDirectoryFiles(io, alloc, &results, resolved);
+            try appendDirectoryFilesStrict(io, alloc, &results, resolved);
             alloc.free(resolved);
         } else {
-            try appendExistingPath(io, alloc, &results, resolved);
+            try appendExplicitFile(io, alloc, &results, resolved);
         }
     }
     return results.toOwnedSlice(alloc);
@@ -107,6 +107,19 @@ fn appendExistingPath(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList(
     try results.append(alloc, path);
 }
 
+fn appendExplicitFile(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), path: []const u8) !void {
+    errdefer alloc.free(path);
+    const file = try Io.Dir.openFileAbsolute(io, path, .{ .allow_directory = false });
+    file.close(io);
+    for (results.items) |existing| {
+        if (std.mem.eql(u8, existing, path)) {
+            alloc.free(path);
+            return;
+        }
+    }
+    try results.append(alloc, path);
+}
+
 // Recursively collect all files under dir_path. Does not take ownership of dir_path.
 fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), dir_path: []const u8) !void {
     var dir = Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch return;
@@ -126,12 +139,32 @@ fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayLis
     }
 }
 
-test "expandExplicitPaths keeps existing files and drops missing ones" {
+// Explicit directories are strict: a path the user named must not produce a
+// clean result when it cannot be opened or one of its files cannot be read.
+fn appendDirectoryFilesStrict(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), dir_path: []const u8) !void {
+    var dir = try Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
+
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        const child = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
+        switch (entry.kind) {
+            .file, .unknown => try appendExplicitFile(io, alloc, results, child),
+            .directory => {
+                try appendDirectoryFilesStrict(io, alloc, results, child);
+                alloc.free(child);
+            },
+            else => alloc.free(child),
+        }
+    }
+}
+
+test "expandExplicitPaths keeps existing files" {
     const alloc = std.testing.allocator;
     var env = std.process.Environ.Map.init(alloc);
     defer env.deinit();
 
-    const input = [_][]const u8{ "/dev/null", "/nonexistent/shg/path/xyz" };
+    const input = [_][]const u8{"/dev/null"};
     const paths = try expandExplicitPaths(std.testing.io, alloc, &env, &input);
     defer {
         for (paths) |p| alloc.free(p);
@@ -144,6 +177,15 @@ test "expandExplicitPaths keeps existing files and drops missing ones" {
     } else {
         try std.testing.expectEqual(@as(usize, 0), paths.len);
     }
+}
+
+test "expandExplicitPaths rejects missing paths" {
+    const alloc = std.testing.allocator;
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+
+    const input = [_][]const u8{"/nonexistent/shg/path/xyz"};
+    try std.testing.expectError(error.FileNotFound, expandExplicitPaths(std.testing.io, alloc, &env, &input));
 }
 
 test "discover expands configured home paths" {

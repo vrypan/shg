@@ -42,13 +42,21 @@ pub fn formatForPath(path: []const u8) Format {
 /// line that is not valid JSON is skipped, never crashed on and never dumped
 /// raw.
 pub fn extract(format: Format, bytes: []const u8, alloc: std.mem.Allocator) ![]Piece {
+    var skipped: usize = 0;
+    return extractCounting(format, bytes, alloc, &skipped);
+}
+
+pub fn extractCounting(format: Format, bytes: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Piece {
     var pieces: std.ArrayList(Piece) = .empty;
     var line_no: usize = 0;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |line| {
         line_no += 1;
         if (line.len == 0) continue;
-        const parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch continue;
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch {
+            skipped.* += 1;
+            continue;
+        };
         defer parsed.deinit();
         switch (format) {
             .claude => try extractClaude(parsed.value, line_no, alloc, &pieces),
@@ -283,8 +291,10 @@ test "malformed line is skipped, not crashed on" {
     const bytes =
         "this is not json\n" ++
         "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"ok\"}}\n";
-    const pieces = try extract(.claude, bytes, alloc);
+    var skipped: usize = 0;
+    const pieces = try extractCounting(.claude, bytes, alloc, &skipped);
     defer freePieces(alloc, pieces);
     try std.testing.expectEqual(@as(usize, 1), pieces.len);
     try std.testing.expectEqualStrings("ok", pieces[0].text);
+    try std.testing.expectEqual(@as(usize, 1), skipped);
 }

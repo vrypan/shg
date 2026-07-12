@@ -62,6 +62,15 @@ test "$status" -eq 0
 test -s "$xdg/shg/rules.bin"
 say "PASS create default compiled config rules"
 
+say "TEST explicit missing paths are errors"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" history --path "$tmp/does-not-exist"
+test "$status" -eq 2
+printf '%s\n' "$output" | grep -q 'FileNotFound'
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$tmp/does-not-exist"
+test "$status" -eq 2
+printf '%s\n' "$output" | grep -q 'FileNotFound'
+say "PASS explicit missing paths are errors"
+
 say "TEST configured history paths"
 home=$tmp/home
 mkdir -p "$home"
@@ -232,6 +241,14 @@ if printf '%s\n' "$output" | grep -q "$agent_tok"; then
 fi
 say "PASS shg deep scans transcripts (per session)"
 
+say "TEST shg deep reports malformed transcript records"
+broken=$tmp/broken-transcript.jsonl
+printf '%s\n' 'truncated record with ghp_abcdefghijklmnopqrstuvwxyz012345' > "$broken"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$broken"
+test "$status" -eq 2
+printf '%s\n' "$output" | grep -q 'skipped 1 malformed JSONL record(s)'
+say "PASS shg deep reports malformed transcript records"
+
 say "TEST shg deep is strict by default, --thorough loosens"
 tdir=$tmp/thorough/.claude/projects/p
 mkdir -p "$tdir"
@@ -261,6 +278,7 @@ fix_tok=ghp_fixremovalabcdefghijklmnopqrstuvwxyz987654
 printf 'ls -la\necho %s\ngit status\n' "$fix_tok" > "$fixf"
 fix_expected=$tmp/fix_expected
 printf 'ls -la\necho %s\ngit status\n' "$fix_tok" > "$fix_expected"
+chmod 600 "$fixf"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$fixf" --dry-run
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$fix_tok"
@@ -284,6 +302,7 @@ test "$status" -eq 1
 if grep -q "$fix_tok" "$fixf"; then printf '%s\n' "fix did not remove the secret" >&2; exit 1; fi
 grep -q '^ls -la$' "$fixf"
 grep -q '^git status$' "$fixf"
+test -n "$(find "$fixf" -prune -perm 0600 -print)"
 # count-only output: the full token never printed
 if printf '%s\n' "$output" | grep -q "$fix_tok"; then printf '%s\n' "fix --yes echoed the secret" >&2; exit 1; fi
 # no backup or temp file left, and the secret is in no file
@@ -309,6 +328,35 @@ fi
 printf '%s\n' "$output" | grep -q 'Remove this entry? \[y/N/q\] '
 printf '%s\n' "$output" | grep -q '^$'
 say "PASS shg fix interactive q applies confirmed removals and stops"
+
+say "TEST shg fix refuses to overwrite concurrently changed history"
+racef=$tmp/fix_race_history
+race_tok=ghp_fixraceabcdefghijklmnopqrstuvwxyz987654
+printf 'echo %s\n' "$race_tok" > "$racef"
+mkfifo "$tmp/fix_input"
+exec 3<>"$tmp/fix_input"
+env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$racef" <&3 >"$tmp/fix_output" 2>"$tmp/fix_error" &
+race_pid=$!
+i=0
+while ! grep -q 'Remove this entry' "$tmp/fix_output"; do
+    i=$((i + 1))
+    test "$i" -lt 100 || { printf '%s\n' "fix prompt did not appear" >&2; exit 1; }
+    sleep 0.01
+done
+printf '%s\n' 'new command appended while prompting' >> "$racef"
+printf 'y\n' >&3
+race_status=0
+wait "$race_pid" || race_status=$?
+exec 3>&-
+test "$race_status" -eq 2
+grep -q 'new command appended while prompting' "$racef"
+grep -q "$race_tok" "$racef"
+grep -q 'changed while confirming removals; no changes applied' "$tmp/fix_error"
+if find "$tmp" -name '*.shg-tmp.*' -print | grep -q .; then
+    printf '%s\n' "fix left a temp file after concurrent update" >&2
+    exit 1
+fi
+say "PASS shg fix refuses to overwrite concurrently changed history"
 
 say "TEST shg fix --yes removes an entire fish history block"
 fishf=$tmp/fish_history
@@ -336,5 +384,16 @@ if grep -q '^  when: 200$' "$fishf" || grep -q '^  paths:$' "$fishf"; then
 fi
 ls "$fishf".shg-backup* "$fishf".shg-tmp* 2>/dev/null && { printf '%s\n' "fix left a fish backup/temp file" >&2; exit 1; }
 say "PASS shg fix --yes removes an entire fish history block"
+
+say "TEST shg fix removes a complete continued zsh entry"
+zshf=$tmp/.zsh_history
+zsh_tok=ghp_zshcontinuationabcdefghijklmnopqrstuvwxyz987654
+printf '%s\n' ': 1715000000:0;printf \' "$zsh_tok" 'next-command' > "$zshf"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$zshf" --yes
+test "$status" -eq 1
+if grep -q "$zsh_tok" "$zshf"; then printf '%s\n' "fix left the zsh secret" >&2; exit 1; fi
+if grep -q '^: 1715000000:0;' "$zshf"; then printf '%s\n' "fix left a partial zsh entry" >&2; exit 1; fi
+grep -q '^next-command$' "$zshf"
+say "PASS shg fix removes a complete continued zsh entry"
 
 say "SMOKE PASS"
