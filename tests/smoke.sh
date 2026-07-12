@@ -4,6 +4,13 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
+# Detach the script from any inherited pipe/file stdin (CI runs with a piped
+# stdin). shg treats a piped stdin as history-to-scan, which would suppress the
+# configured-path and env scans these tests exercise. /dev/null is a character
+# device, so it is not treated as piped history. Tests that need piped input
+# pipe it explicitly.
+exec < /dev/null
+
 shg=${SHG_BIN:-zig-out/bin/shg}
 shg_config=${SHG_CONFIG_BIN:-zig-out/bin/shg-config}
 
@@ -71,6 +78,18 @@ test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$home/.zsh_history"
 printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS configured history paths"
+
+say "TEST a directory in the discovered paths does not abort the scan"
+# A HISTFILE (or configured path) pointing at a directory must be skipped,
+# not crash the whole scan with an unreadable-file error.
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" HISTFILE="$tmp" "$shg" scan --env false
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$home/.zsh_history"
+if printf '%s\n' "$output" | grep -qi 'ReadFailed'; then
+    printf '%s\n' "a directory path aborted the scan" >&2
+    exit 1
+fi
+say "PASS a directory in the discovered paths does not abort the scan"
 
 say "TEST --path accepts a directory and walks it"
 walkdir=$tmp/walk/nested
