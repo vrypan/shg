@@ -153,8 +153,11 @@ For shell startup scans and pre-history hooks see [INTEGRATIONS.md](INTEGRATIONS
 `shg history` scans command histories only, and `shg env` scans the
 environment only — the two halves of `scan`, each with the scan flags that
 apply. `history` covers shell (bash/zsh/fish), REPLs (psql/mysql/…), and
-**agent command history**: Codex `~/.codex/history.jsonl` is a list of typed
-prompts, so it is scanned here (per line), not by `deep`.
+**agent command history** — the list of prompts you typed into a coding agent:
+Codex (`~/.codex/history.jsonl`), Claude Code (`~/.claude/history.jsonl`),
+Ollama (`~/.ollama/history`), and Aider (`~/.aider.input.history`). These are
+scanned per line, like shell history. Full agent *transcripts* (tool output,
+etc.) are the concern of `deep`, not `history`.
 
 ### deep
 

@@ -13,4 +13,9 @@
 ~/.irb_history
 ~/.pry_history
 ~/.Rhistory
+# AI agent command histories (typed prompts). Full transcripts are scanned
+# by `shg deep`, not here.
 ~/.codex/history.jsonl
+~/.claude/history.jsonl
+~/.ollama/history
+~/.aider.input.history

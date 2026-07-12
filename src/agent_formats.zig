@@ -27,13 +27,14 @@ pub const Piece = struct {
     text: []const u8,
 };
 
-pub const Format = enum { claude, codex_history, codex_session };
+pub const Format = enum { claude, claude_history, codex_history, codex_session };
 
 /// Pick a transcript format from the file path. Unknown `.jsonl` defaults to
 /// Claude (the most permissive extractor).
 pub fn formatForPath(path: []const u8) Format {
     if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null) return .codex_history;
     if (std.mem.indexOf(u8, path, "/.codex/sessions/") != null) return .codex_session;
+    if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null) return .claude_history;
     return .claude;
 }
 
@@ -51,6 +52,7 @@ pub fn extract(format: Format, bytes: []const u8, alloc: std.mem.Allocator) ![]P
         defer parsed.deinit();
         switch (format) {
             .claude => try extractClaude(parsed.value, line_no, alloc, &pieces),
+            .claude_history => try extractClaudeHistory(parsed.value, line_no, alloc, &pieces),
             .codex_history => try extractCodexHistory(parsed.value, line_no, alloc, &pieces),
             .codex_session => try extractCodexSession(parsed.value, line_no, alloc, &pieces),
         }
@@ -96,6 +98,18 @@ fn extractClaude(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pi
 fn extractCodexHistory(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
     const obj = asObject(root) orelse return;
     if (objStr(obj, "text")) |t| try emit(pieces, alloc, .user_input, line, t);
+}
+
+// Claude Code command history: {"display": "<typed prompt>",
+// "pastedContents": "<stringified JSON of pasted text>", ...}. The typed
+// prompt is `display`; pasted content may itself carry a pasted secret, so
+// scan it too when non-empty.
+fn extractClaudeHistory(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
+    const obj = asObject(root) orelse return;
+    if (objStr(obj, "display")) |d| try emit(pieces, alloc, .user_input, line, d);
+    if (objStr(obj, "pastedContents")) |pc| {
+        if (pc.len > 2) try emit(pieces, alloc, .user_input, line, pc);
+    }
 }
 
 fn extractCodexSession(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
@@ -217,6 +231,26 @@ test "claude: tool_use input is tool_call, text is assistant, thinking is reason
     try std.testing.expectEqualStrings("env | grep KEY", pieces[0].text);
     try std.testing.expectEqual(Source.assistant, pieces[1].source);
     try std.testing.expectEqual(Source.reasoning, pieces[2].source);
+}
+
+test "claude history: display is user_input, pasted content scanned" {
+    const alloc = std.testing.allocator;
+    const bytes =
+        "{\"display\":\"deploy with export TOKEN=ghp_x\",\"pastedContents\":\"{}\",\"timestamp\":\"1\",\"project\":\"/p\"}\n" ++
+        "{\"display\":\"check this\",\"pastedContents\":\"AWS_SECRET=abc123\",\"timestamp\":\"2\",\"project\":\"/p\"}\n";
+    const pieces = try extract(.claude_history, bytes, alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 3), pieces.len);
+    try std.testing.expectEqual(Source.user_input, pieces[0].source);
+    try std.testing.expectEqualStrings("deploy with export TOKEN=ghp_x", pieces[0].text);
+    // line 2: display + non-empty pastedContents both emitted
+    try std.testing.expectEqualStrings("check this", pieces[1].text);
+    try std.testing.expectEqualStrings("AWS_SECRET=abc123", pieces[2].text);
+}
+
+test "formatForPath detects claude history" {
+    try std.testing.expectEqual(Format.claude_history, formatForPath("/home/u/.claude/history.jsonl"));
+    try std.testing.expectEqual(Format.claude, formatForPath("/home/u/.claude/projects/p/x.jsonl"));
 }
 
 test "codex history: text is user_input" {

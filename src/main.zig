@@ -176,10 +176,12 @@ fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.
 fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Entry {
     if (std.mem.indexOf(u8, path, "fish_history") != null)
         return fish_parser.parse(reader, path, alloc, skipped);
-    // Codex command history is a JSONL file of typed prompts; treat it as
+    // Agent command histories are JSONL files of typed prompts; treat them as
     // history (one prompt per entry), not as a generic JSON blob.
     if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null)
-        return parseCodexHistory(reader, path, alloc);
+        return parseAgentHistory(reader, path, .codex_history, alloc);
+    if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null)
+        return parseAgentHistory(reader, path, .claude_history, alloc);
     if (std.mem.endsWith(u8, path, ".jsonl"))
         return jsonl_parser.parse(reader, path, alloc);
     // The zsh parser also accepts plain one-command-per-line histories. Using it
@@ -187,9 +189,9 @@ fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, ski
     return zsh_parser.parse(reader, path, alloc, skipped);
 }
 
-fn parseCodexHistory(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
+fn parseAgentHistory(reader: *Io.Reader, path: []const u8, format: agent_formats.Format, alloc: std.mem.Allocator) ![]Entry {
     const bytes = try reader.allocRemaining(alloc, Io.Limit.limited(512 * 1024 * 1024));
-    const pieces = try agent_formats.extract(.codex_history, bytes, alloc);
+    const pieces = try agent_formats.extract(format, bytes, alloc);
     var entries: std.ArrayList(Entry) = .empty;
     for (pieces) |p| {
         try entries.append(alloc, .{
