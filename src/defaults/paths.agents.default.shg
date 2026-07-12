@@ -3,4 +3,3 @@
 # The transcript format is detected from the path.
 ~/.claude/projects
 ~/.codex/sessions
-~/.codex/history.jsonl

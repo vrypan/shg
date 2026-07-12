@@ -10,6 +10,7 @@ const report = @import("report.zig");
 const rules = @import("rules.zig");
 const detect = @import("detect.zig");
 const agents = @import("agents.zig");
+const agent_formats = @import("agent_formats.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
@@ -175,11 +176,31 @@ fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.
 fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Entry {
     if (std.mem.indexOf(u8, path, "fish_history") != null)
         return fish_parser.parse(reader, path, alloc, skipped);
+    // Codex command history is a JSONL file of typed prompts; treat it as
+    // history (one prompt per entry), not as a generic JSON blob.
+    if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null)
+        return parseCodexHistory(reader, path, alloc);
     if (std.mem.endsWith(u8, path, ".jsonl"))
         return jsonl_parser.parse(reader, path, alloc);
     // The zsh parser also accepts plain one-command-per-line histories. Using it
     // as the default preserves zsh extended metadata for explicit --path scans.
     return zsh_parser.parse(reader, path, alloc, skipped);
+}
+
+fn parseCodexHistory(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
+    const bytes = try reader.allocRemaining(alloc, Io.Limit.limited(512 * 1024 * 1024));
+    const pieces = try agent_formats.extract(.codex_history, bytes, alloc);
+    var entries: std.ArrayList(Entry) = .empty;
+    for (pieces) |p| {
+        try entries.append(alloc, .{
+            .file = path,
+            .line = p.line,
+            .timestamp = null,
+            .raw = p.text,
+            .command = p.text,
+        });
+    }
+    return entries.toOwnedSlice(alloc);
 }
 
 fn warnSkippedLines(io: Io, path: []const u8, skipped: usize) void {
