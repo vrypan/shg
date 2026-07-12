@@ -53,7 +53,11 @@ fn run(init: std.process.Init) !void {
 
     if (args.subcommand == .help or args.subcommand == .version) return;
 
-    if (args.subcommand == .agents) {
+    if (args.subcommand == .deep or args.subcommand == .agents) {
+        if (args.subcommand == .agents) {
+            try stderr.interface.writeAll("shg: 'agents' is deprecated; use 'shg deep'\n");
+            try stderr.flush();
+        }
         try agents.run(init, args);
         return;
     }

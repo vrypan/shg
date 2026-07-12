@@ -5,7 +5,7 @@ const build_options = @import("build_options");
 
 pub const version = build_options.version;
 
-pub const Subcommand = enum { scan, agents, help, version };
+pub const Subcommand = enum { scan, history, env, deep, agents, help, version };
 
 pub const Args = struct {
     subcommand: Subcommand,
@@ -19,32 +19,37 @@ pub const Args = struct {
     summary: bool,
     one_line: bool,
     all_content: bool,
+    thorough: bool,
     env_explicit: bool,
     hist_explicit: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
-    .{ .name = "scan",    .description = "Scan history files for secrets (default)" },
-    .{ .name = "agents",  .description = "Scan AI agent transcripts for secrets"    },
+    .{ .name = "scan",    .description = "Scan history + env for secrets (default)" },
+    .{ .name = "history", .description = "Scan command histories (shell, REPLs, agents)" },
+    .{ .name = "env",     .description = "Scan environment variables"                },
+    .{ .name = "deep",    .description = "Scan AI agent transcripts (per session)"    },
     .{ .name = "version", .description = "Print version"                            },
 };
 
-const agents_flags = [_]zecli.FlagSpec{
+const deep_flags = [_]zecli.FlagSpec{
     .{ .name = "path",        .short = 'p', .value = .string, .value_name = "PATH",  .description = "Transcript file or directory to scan", .repeatable = true },
     .{ .name = "all-content",              .value = .bool_optional,                  .description = "Also scan assistant messages and reasoning", .default_value = "false" },
+    .{ .name = "thorough",                 .value = .bool_optional,                  .description = "Run all detectors, not just high-confidence ones", .default_value = "false" },
     .{ .name = "level",                    .value = .string, .value_name = "LEVEL", .description = "low|medium|high", .default_value = "high" },
     .{ .name = "json",                     .value = .bool_optional,                  .description = "Output findings as NDJSON", .default_value = "false" },
 };
 
-const agents_spec = zecli.CommandSpec{
-    .name        = "agents",
+const deep_spec = zecli.CommandSpec{
+    .name        = "deep",
     .description = "Scan AI agent session transcripts for secrets, reported per session file.",
-    .usage       = "shg agents [options]",
-    .flags       = &agents_flags,
+    .usage       = "shg deep [options]",
+    .flags       = &deep_flags,
     .extra_help  =
         \\
-        \\With no --path, scans the locations in paths.agents.*.shg
-        \\(~/.claude/projects, ~/.codex/sessions, ~/.codex/history.jsonl by default).
+        \\Strict by default (high-confidence detectors only); use --thorough to
+        \\run every detector. With no --path, scans the locations in
+        \\paths.deep.*.shg (~/.claude/projects, ~/.codex/sessions by default).
         \\
     ,
 };
@@ -63,7 +68,7 @@ const scan_flags = [_]zecli.FlagSpec{
 
 const scan_spec = zecli.CommandSpec{
     .name        = "scan",
-    .description = "Scan shell history files for accidentally persisted secrets.",
+    .description = "Scan command histories and environment variables for secrets.",
     .usage       = "shg scan [options]",
     .flags       = &scan_flags,
     .extra_help  =
@@ -71,6 +76,41 @@ const scan_spec = zecli.CommandSpec{
         \\Use 'shg-config status' to list active detection patterns and rules.
         \\
     ,
+};
+
+// history: the scan flags without the env/hist source toggles.
+const history_flags = [_]zecli.FlagSpec{
+    .{ .name = "path",               .short = 'p', .value = .string, .value_name = "PATH",  .description = "History file or directory to scan",  .repeatable = true },
+    .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
+    .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
+    .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
+    .{ .name = "json",                             .value = .bool_optional,                  .description = "Output findings as NDJSON",    .default_value = "false" },
+    .{ .name = "summary",                          .value = .bool_optional,                  .description = "Print H M L counts and exit",  .default_value = "false" },
+    .{ .name = "one-line",                         .value = .bool_optional,                  .description = "One line per finding",         .default_value = "false" },
+};
+
+const history_spec = zecli.CommandSpec{
+    .name        = "history",
+    .description = "Scan command histories (shell, REPLs, and agent command history).",
+    .usage       = "shg history [options]",
+    .flags       = &history_flags,
+};
+
+// env: no path or entropy source toggles beyond the shared output flags.
+const env_flags = [_]zecli.FlagSpec{
+    .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
+    .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
+    .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
+    .{ .name = "json",                             .value = .bool_optional,                  .description = "Output findings as NDJSON",    .default_value = "false" },
+    .{ .name = "summary",                          .value = .bool_optional,                  .description = "Print H M L counts and exit",  .default_value = "false" },
+    .{ .name = "one-line",                         .value = .bool_optional,                  .description = "One line per finding",         .default_value = "false" },
+};
+
+const env_spec = zecli.CommandSpec{
+    .name        = "env",
+    .description = "Scan environment variables for secrets.",
+    .usage       = "shg env [options]",
+    .flags       = &env_flags,
 };
 
 const root_spec = zecli.CommandSpec{
@@ -95,6 +135,15 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
         const first = raw[1];
         if (std.mem.eql(u8, first, "scan")) {
             subcmd = .scan;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "history")) {
+            subcmd = .history;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "env")) {
+            subcmd = .env;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "deep")) {
+            subcmd = .deep;
             subcmd_args = if (raw.len > 2) raw[2..] else &.{};
         } else if (std.mem.eql(u8, first, "agents")) {
             subcmd = .agents;
@@ -128,70 +177,101 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 return defaultArgs(.help);
             }
             const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, scan_spec);
-
-            var paths: std.ArrayList([]const u8) = .empty;
-            for (parsed.flags.items) |flag| {
-                if (std.mem.eql(u8, flag.name, "path")) {
-                    if (flag.value) |v| try paths.append(alloc, v);
-                }
+            const scan_hist = zecli.parseBool(parsed.last("hist") orelse "true") catch unreachable;
+            const scan_env = zecli.parseBool(parsed.last("env") orelse "true") catch unreachable;
+            return buildScanArgs(alloc, writer, parsed, .scan, scan_hist, scan_env);
+        },
+        .history => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, history_spec);
+                return defaultArgs(.help);
             }
-
-            const level_str = parsed.last("level") orelse "high";
-            const level = parseSeverity(level_str) orelse {
-                try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
-                return error.ReportedCliError;
-            };
-
-            const thr_str = parsed.last("entropy-threshold") orelse "3.5";
-            const entropy_threshold = std.fmt.parseFloat(f64, thr_str) catch {
-                try writer.print("error: invalid --entropy-threshold value '{s}'\n", .{thr_str});
-                return error.ReportedCliError;
-            };
-
-            return Args{
-                .subcommand = .scan,
-                .paths = try paths.toOwnedSlice(alloc),
-                .scan_env = zecli.parseBool(parsed.last("env") orelse "true") catch unreachable,
-                .scan_hist = zecli.parseBool(parsed.last("hist") orelse "true") catch unreachable,
-                .level = level,
-                .entropy_threshold = entropy_threshold,
-                .redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable,
-                .json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable,
-                .summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable,
-                .one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable,
-                .all_content = false,
-                .env_explicit = parsed.last("env") != null,
-                .hist_explicit = parsed.last("hist") != null,
-            };
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, history_spec);
+            return buildScanArgs(alloc, writer, parsed, .history, true, false);
+        },
+        .env => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, env_spec);
+                return defaultArgs(.help);
+            }
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, env_spec);
+            return buildScanArgs(alloc, writer, parsed, .env, false, true);
+        },
+        .deep => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, deep_spec);
+                return defaultArgs(.help);
+            }
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, deep_spec);
+            return buildDeepArgs(alloc, writer, parsed, .deep);
         },
         .agents => {
             if (zecli.helpRequested(subcmd_args)) {
-                try zecli.printCommandHelp(alloc, writer, agents_spec);
+                try zecli.printCommandHelp(alloc, writer, deep_spec);
                 return defaultArgs(.help);
             }
-            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, agents_spec);
-
-            var paths: std.ArrayList([]const u8) = .empty;
-            for (parsed.flags.items) |flag| {
-                if (std.mem.eql(u8, flag.name, "path")) {
-                    if (flag.value) |v| try paths.append(alloc, v);
-                }
-            }
-
-            const level_str = parsed.last("level") orelse "high";
-            const level = parseSeverity(level_str) orelse {
-                try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
-                return error.ReportedCliError;
-            };
-
-            var args = defaultArgs(.agents);
-            args.paths = try paths.toOwnedSlice(alloc);
-            args.level = level;
-            args.json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable;
-            args.all_content = zecli.parseBool(parsed.last("all-content") orelse "false") catch unreachable;
-            return args;
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, deep_spec);
+            return buildDeepArgs(alloc, writer, parsed, .agents);
         },
     }
+}
+
+fn buildScanArgs(alloc: std.mem.Allocator, writer: anytype, parsed: anytype, subcommand: Subcommand, scan_hist: bool, scan_env: bool) !Args {
+    var paths: std.ArrayList([]const u8) = .empty;
+    for (parsed.flags.items) |flag| {
+        if (std.mem.eql(u8, flag.name, "path")) {
+            if (flag.value) |v| try paths.append(alloc, v);
+        }
+    }
+
+    const level_str = parsed.last("level") orelse "high";
+    const level = parseSeverity(level_str) orelse {
+        try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
+        return error.ReportedCliError;
+    };
+
+    const thr_str = parsed.last("entropy-threshold") orelse "3.5";
+    const entropy_threshold = std.fmt.parseFloat(f64, thr_str) catch {
+        try writer.print("error: invalid --entropy-threshold value '{s}'\n", .{thr_str});
+        return error.ReportedCliError;
+    };
+
+    var args = defaultArgs(subcommand);
+    args.paths = try paths.toOwnedSlice(alloc);
+    args.scan_hist = scan_hist;
+    args.scan_env = scan_env;
+    args.level = level;
+    args.entropy_threshold = entropy_threshold;
+    args.redacted = zecli.parseBool(parsed.last("redacted") orelse "true") catch unreachable;
+    args.json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable;
+    args.summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable;
+    args.one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable;
+    args.env_explicit = parsed.last("env") != null;
+    args.hist_explicit = parsed.last("hist") != null;
+    return args;
+}
+
+fn buildDeepArgs(alloc: std.mem.Allocator, writer: anytype, parsed: anytype, subcommand: Subcommand) !Args {
+    var paths: std.ArrayList([]const u8) = .empty;
+    for (parsed.flags.items) |flag| {
+        if (std.mem.eql(u8, flag.name, "path")) {
+            if (flag.value) |v| try paths.append(alloc, v);
+        }
+    }
+
+    const level_str = parsed.last("level") orelse "high";
+    const level = parseSeverity(level_str) orelse {
+        try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
+        return error.ReportedCliError;
+    };
+
+    var args = defaultArgs(subcommand);
+    args.paths = try paths.toOwnedSlice(alloc);
+    args.level = level;
+    args.json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable;
+    args.all_content = zecli.parseBool(parsed.last("all-content") orelse "false") catch unreachable;
+    args.thorough = zecli.parseBool(parsed.last("thorough") orelse "false") catch unreachable;
+    return args;
 }
 
 fn parseSeverity(s: []const u8) ?Severity {
@@ -214,6 +294,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .summary = false,
         .one_line = false,
         .all_content = false,
+        .thorough = false,
         .env_explicit = false,
         .hist_explicit = false,
     };
