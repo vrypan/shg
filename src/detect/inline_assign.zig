@@ -110,7 +110,8 @@ fn assignmentValue(s: []const u8, start: usize) ?[]const u8 {
     }
 
     var end = start;
-    while (end < s.len and !std.ascii.isWhitespace(s[end]) and s[end] != '"' and s[end] != '\'') end += 1;
+    while (end < s.len and !std.ascii.isWhitespace(s[end]) and
+        s[end] != '"' and s[end] != '\'' and s[end] != '&' and s[end] != '#') end += 1;
     if (end == start) return null;
     return s[start..end];
 }
@@ -120,7 +121,8 @@ fn isNameChar(c: u8) bool {
 }
 
 fn isBoundary(c: u8) bool {
-    return std.ascii.isWhitespace(c) or c == '"' or c == '\'' or c == '(' or c == '[' or c == '{';
+    return std.ascii.isWhitespace(c) or c == '"' or c == '\'' or
+        c == '(' or c == '[' or c == '{' or c == '?' or c == '&' or c == ';';
 }
 
 fn stripLeadingKeyword(cmd: []const u8) []const u8 {
@@ -156,6 +158,32 @@ test "inline assign detects multiple secrets on one line" {
     try std.testing.expectEqual(@as(usize, 2), cs.len);
     try std.testing.expectEqualStrings("aX3fKm92LqR7", cs[0].token);
     try std.testing.expectEqualStrings("zK9mQx2LwPq4", cs[1].token);
+}
+
+test "inline assign detects secret in quoted URL query param" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "curl \"https://api.example.com/v1?api_key=zK9mQx2LwPq44XyTr7Vn&user=bob\"", .command = "curl \"https://api.example.com/v1?api_key=zK9mQx2LwPq44XyTr7Vn&user=bob\"" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("zK9mQx2LwPq44XyTr7Vn", cs[0].token);
+}
+
+test "inline assign detects secret in non-first unquoted URL query param" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "curl https://api.example.com/v1?user=bob&token=zK9mQx2LwPq44XyTr7Vn", .command = "curl https://api.example.com/v1?user=bob&token=zK9mQx2LwPq44XyTr7Vn" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("zK9mQx2LwPq44XyTr7Vn", cs[0].token);
+}
+
+test "inline assign ignores plain URL query params without secrets" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "curl https://api.example.com/v1?user=bob&page=2", .command = "curl https://api.example.com/v1?user=bob&page=2" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
 }
 
 test "inline assign detects password" {

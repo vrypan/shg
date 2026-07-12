@@ -131,7 +131,7 @@ are silently dropped to reduce false positives.
 
 | Detector | What it matches |
 |---|---|
-| `inline_assign` | `VAR=value` with sensitive keywords |
+| `inline_assign` | `VAR=value` and `?api_key=value` query params with sensitive keywords |
 | `auth_header` | `Authorization: Bearer <token>`, `--password <val>` |
 | `credential_url` | `scheme://user:pass@host` |
 | `known_token` | known provider token prefixes (`ghp_`, `sk-ant-`, `AKIA`, …) |
