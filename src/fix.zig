@@ -175,7 +175,7 @@ fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []cons
     // Temp file in the same directory as the target so the rename is an atomic
     // same-filesystem move. Create it exclusively so concurrent runs do not
     // truncate each other's temp files.
-    const stamp = timestampNanos();
+    const stamp = Io.Timestamp.now(io, .real).toNanoseconds();
     var attempt: usize = 0;
     while (attempt < 100) : (attempt += 1) {
         const tmp = try std.fmt.allocPrint(alloc, "{s}.shg-tmp.{d}.{d}", .{ path, stamp, attempt });
@@ -196,14 +196,6 @@ fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []cons
         return;
     }
     return error.PathAlreadyExists;
-}
-
-fn timestampNanos() u128 {
-    var ts: std.c.timespec = undefined;
-    if (std.c.clock_gettime(.REALTIME, &ts) == 0) {
-        return @as(u128, @intCast(ts.sec)) * std.time.ns_per_s + @as(u128, @intCast(ts.nsec));
-    }
-    return @as(u128, @intCast(std.c.getpid()));
 }
 
 // Rebuild file bytes with the given 1-based inclusive line spans removed,
