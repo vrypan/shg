@@ -46,6 +46,10 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
 
         const token = stripQuotes(assignment.value);
 
+        // A value that is entirely a shell expansion ($VAR, ${VAR}, $A$B)
+        // cannot hold a literal secret — skip it outright.
+        if (isPureExpansion(token)) continue;
+
         const is_placeholder = blk: {
             if (token.len == 0) break :blk true;
             const tok_lower = try std.ascii.allocLowerString(alloc, token);
@@ -123,6 +127,34 @@ fn isNameChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
 }
 
+// True when the value is made up solely of shell expansions ($NAME, ${...})
+// possibly separated by whitespace, with no literal content — e.g. "$VAR",
+// "${TOKEN}", "$A$B". A value with any literal part ("abc$VAR", "$VAR/x")
+// is not pure and is left to normal scoring.
+fn isPureExpansion(v: []const u8) bool {
+    if (v.len == 0) return false;
+    var i: usize = 0;
+    var saw_expansion = false;
+    while (i < v.len) {
+        if (std.ascii.isWhitespace(v[i])) { i += 1; continue; }
+        if (v[i] != '$') return false;
+        i += 1;
+        if (i >= v.len) return false; // lone '$'
+        if (v[i] == '{') {
+            const close = std.mem.indexOfScalarPos(u8, v, i + 1, '}') orelse return false;
+            if (close == i + 1) return false; // empty ${}
+            i = close + 1;
+        } else if (std.ascii.isAlphabetic(v[i]) or v[i] == '_') {
+            i += 1;
+            while (i < v.len and (std.ascii.isAlphanumeric(v[i]) or v[i] == '_')) i += 1;
+        } else {
+            return false; // $ followed by a digit, punctuation, (, etc.
+        }
+        saw_expansion = true;
+    }
+    return saw_expansion;
+}
+
 fn isBoundary(c: u8) bool {
     return std.ascii.isWhitespace(c) or c == '"' or c == '\'' or
         c == '(' or c == '[' or c == '{' or c == '?' or c == '&' or c == ';';
@@ -189,14 +221,29 @@ test "inline assign ignores plain URL query params without secrets" {
     try std.testing.expectEqual(@as(usize, 0), cs.len);
 }
 
-test "inline assign strips quotes so quoted shell-variable is a placeholder" {
+test "inline assign suppresses a quoted pure shell expansion" {
     const alloc = std.testing.allocator;
     const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "HOMEBREW_TAP_GITHUB_TOKEN=\"$HOMEBREW_TAP_GITHUB_TOKEN\"", .command = "HOMEBREW_TAP_GITHUB_TOKEN=\"$HOMEBREW_TAP_GITHUB_TOKEN\"" };
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "inline assign suppresses a braced pure shell expansion" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export API_TOKEN=${CI_SECRET_TOKEN}", .command = "export API_TOKEN=${CI_SECRET_TOKEN}" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "inline assign still flags a value with literal content around an expansion" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export SECRET_TOKEN=abc$FOO", .command = "export SECRET_TOKEN=abc$FOO" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
     try std.testing.expectEqual(@as(usize, 1), cs.len);
-    try std.testing.expectEqualStrings("$HOMEBREW_TAP_GITHUB_TOKEN", cs[0].token);
-    try std.testing.expect(cs[0].signals.is_placeholder);
+    try std.testing.expectEqualStrings("abc$FOO", cs[0].token);
 }
 
 test "inline assign strips quotes around a real secret value" {
@@ -209,13 +256,12 @@ test "inline assign strips quotes around a real secret value" {
     try std.testing.expect(!cs[0].signals.is_placeholder);
 }
 
-test "inline assign flags shell-variable value as placeholder" {
+test "inline assign suppresses an unquoted pure shell expansion" {
     const alloc = std.testing.allocator;
     const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export GITHUB_TOKEN=$GH_TOKEN", .command = "export GITHUB_TOKEN=$GH_TOKEN" };
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
-    try std.testing.expectEqual(@as(usize, 1), cs.len);
-    try std.testing.expect(cs[0].signals.is_placeholder);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
 }
 
 test "inline assign detects password" {
