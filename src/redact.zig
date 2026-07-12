@@ -40,23 +40,69 @@ pub fn redactToken(token: []const u8, alloc: std.mem.Allocator) ![]u8 {
     return out;
 }
 
-pub fn redactCommand(cmd: []const u8, token: []const u8, alloc: std.mem.Allocator) !RedactedCommand {
-    if (token.len == 0) {
+const Span = struct { start: usize, end: usize };
+
+/// Redact every occurrence of every token in `tokens` from `cmd`, so a command
+/// that carries more than one secret never exposes any of them. `primary` is the
+/// token whose redacted span is returned in `match_start`/`match_len` (used to
+/// center the display window). Content after the last redacted secret is
+/// truncated with "..." as defense-in-depth against an undetected trailing value.
+pub fn redactCommand(cmd: []const u8, tokens: []const []const u8, primary: []const u8, alloc: std.mem.Allocator) !RedactedCommand {
+    var spans: std.ArrayList(Span) = .empty;
+    defer spans.deinit(alloc);
+    for (tokens) |token| {
+        if (token.len == 0) continue;
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, cmd, pos, token)) |idx| {
+            try spans.append(alloc, .{ .start = idx, .end = idx + token.len });
+            pos = idx + token.len;
+        }
+    }
+    if (spans.items.len == 0) {
         return .{ .text = try alloc.dupe(u8, cmd), .match_start = 0, .match_len = 0 };
     }
-    const idx = std.mem.indexOf(u8, cmd, token) orelse {
-        return .{ .text = try alloc.dupe(u8, cmd), .match_start = 0, .match_len = 0 };
-    };
-    const redacted = try redactToken(token, alloc);
-    defer alloc.free(redacted);
-    // Truncate after the redacted token so any subsequent sensitive values are not shown.
-    const has_more = idx + token.len < cmd.len;
-    const suffix = if (has_more) "..." else "";
-    const out = try alloc.alloc(u8, idx + redacted.len + suffix.len);
-    @memcpy(out[0..idx], cmd[0..idx]);
-    @memcpy(out[idx..][0..redacted.len], redacted);
-    if (has_more) @memcpy(out[idx + redacted.len ..], "...");
-    return .{ .text = out, .match_start = idx, .match_len = redacted.len };
+
+    std.mem.sort(Span, spans.items, {}, lessThanSpan);
+    // Merge overlapping/touching spans so a byte is never emitted twice.
+    var merged: std.ArrayList(Span) = .empty;
+    defer merged.deinit(alloc);
+    for (spans.items) |s| {
+        if (merged.items.len > 0 and s.start <= merged.items[merged.items.len - 1].end) {
+            if (s.end > merged.items[merged.items.len - 1].end) merged.items[merged.items.len - 1].end = s.end;
+        } else {
+            try merged.append(alloc, s);
+        }
+    }
+
+    const primary_idx: ?usize = if (primary.len > 0) std.mem.indexOf(u8, cmd, primary) else null;
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    var match_start: usize = 0;
+    var match_len: usize = 0;
+    var cursor: usize = 0;
+    var last_end: usize = 0;
+    for (merged.items) |s| {
+        try out.appendSlice(alloc, cmd[cursor..s.start]);
+        const red = try redactToken(cmd[s.start..s.end], alloc);
+        defer alloc.free(red);
+        if (primary_idx) |pi| {
+            if (pi >= s.start and pi < s.end) {
+                match_start = out.items.len;
+                match_len = red.len;
+            }
+        }
+        try out.appendSlice(alloc, red);
+        cursor = s.end;
+        last_end = s.end;
+    }
+    // Truncate anything after the last secret so an undetected trailing value is not shown.
+    if (last_end < cmd.len) try out.appendSlice(alloc, "...");
+    return .{ .text = try out.toOwnedSlice(alloc), .match_start = match_start, .match_len = match_len };
+}
+
+fn lessThanSpan(_: void, a: Span, b: Span) bool {
+    return a.start < b.start;
 }
 
 test "redact long token shows 4 chars each side" {
@@ -92,7 +138,7 @@ test "redact two-char token" {
 
 test "redact command token at end" {
     const alloc = std.testing.allocator;
-    const r = try redactCommand("export API_KEY=sk-abc123def4567", "sk-abc123def4567", alloc);
+    const r = try redactCommand("export API_KEY=sk-abc123def4567", &.{"sk-abc123def4567"}, "sk-abc123def4567", alloc);
     defer alloc.free(r.text);
     try std.testing.expectEqualStrings("export API_KEY=sk-a********4567", r.text);
     try std.testing.expectEqual(@as(usize, 15), r.match_start);
@@ -113,7 +159,33 @@ test "redact token longer than max capped at 32" {
 test "redact command truncates trailing content" {
     const alloc = std.testing.allocator;
     // "s3cr3tpassword" is 14 chars, len/4 = 3: shows first 3 + stars + last 3
-    const r = try redactCommand("curl -u admin:s3cr3tpassword --verbose", "s3cr3tpassword", alloc);
+    const r = try redactCommand("curl -u admin:s3cr3tpassword --verbose", &.{"s3cr3tpassword"}, "s3cr3tpassword", alloc);
     defer alloc.free(r.text);
     try std.testing.expectEqualStrings("curl -u admin:s3c********ord...", r.text);
+}
+
+test "redact command hides every secret in a multi-secret command" {
+    const alloc = std.testing.allocator;
+    // Two secrets on one line: both must be redacted, neither shown in full,
+    // even though only the first is the primary/matched token.
+    const cmd = "export A_KEY=sk-abcdefghijklmnop and B_KEY=tok-zyxwvutsrqponml done";
+    const tokens = [_][]const u8{ "sk-abcdefghijklmnop", "tok-zyxwvutsrqponml" };
+    const r = try redactCommand(cmd, &tokens, "sk-abcdefghijklmnop", alloc);
+    defer alloc.free(r.text);
+    try std.testing.expect(std.mem.indexOf(u8, r.text, "sk-abcdefghijklmnop") == null);
+    try std.testing.expect(std.mem.indexOf(u8, r.text, "tok-zyxwvutsrqponml") == null);
+    // The primary token's span is reported for windowing.
+    try std.testing.expectEqualStrings("sk-a", r.text[r.match_start .. r.match_start + 4]);
+}
+
+test "redact command leaves a leading secret redacted when a later token is primary" {
+    const alloc = std.testing.allocator;
+    // Regression: the earlier secret must not be shown verbatim just because the
+    // primary/matched token comes after it.
+    const cmd = "PM_KEY=0xdeadbeefdeadbeefcafe then TOKEN=ghp_abcdefghijklmnopqrst";
+    const tokens = [_][]const u8{ "0xdeadbeefdeadbeefcafe", "ghp_abcdefghijklmnopqrst" };
+    const r = try redactCommand(cmd, &tokens, "ghp_abcdefghijklmnopqrst", alloc);
+    defer alloc.free(r.text);
+    try std.testing.expect(std.mem.indexOf(u8, r.text, "0xdeadbeefdeadbeefcafe") == null);
+    try std.testing.expect(std.mem.indexOf(u8, r.text, "ghp_abcdefghijklmnopqrst") == null);
 }

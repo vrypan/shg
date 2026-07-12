@@ -234,6 +234,11 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
     defer seen_tokens.deinit(alloc);
+    // The token behind each finding, aligned with `findings`. Every finding's
+    // command is redacted against the whole set so a command carrying more than
+    // one secret never leaks any of them.
+    var finding_tokens: std.ArrayList([]const u8) = .empty;
+    defer finding_tokens.deinit(alloc);
 
     if (rules_cache) |cache| {
         if (try cache.matchesAny(.ignore, e.command)) return findings.toOwnedSlice(alloc);
@@ -266,20 +271,18 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
 
             const s = scorer.score(c.signals, entropy_threshold);
             const sev = scorer.severity(s);
-            const redacted = try redact.redactCommand(e.command, c.token, alloc);
             const full_match = commandMatchSpan(e.command, c.token);
             try findings.append(alloc, .{
                 .entry = e,
                 .det_type = c.det_type,
                 .severity = sev,
                 .score = s,
-                .redacted_cmd = redacted.text,
-                .redacted_match_start = redacted.match_start,
-                .redacted_match_len = redacted.match_len,
+                .redacted_cmd = "",
                 .full_match_start = full_match.start,
                 .full_match_len = full_match.len,
                 .recommendation = hints.lookup(c.det_type, c.token),
             });
+            try finding_tokens.append(alloc, c.token);
         }
     }
 
@@ -290,21 +293,27 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
             if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
             const token = configCheckToken(rule, e.command) orelse rule.pattern;
             if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;
-            const redacted = try redact.redactCommand(e.command, token, alloc);
             const full_match = commandMatchSpan(e.command, token);
             try findings.append(alloc, .{
                 .entry = e,
                 .det_type = "config_check",
                 .severity = .high,
                 .score = 7,
-                .redacted_cmd = redacted.text,
-                .redacted_match_start = redacted.match_start,
-                .redacted_match_len = redacted.match_len,
+                .redacted_cmd = "",
                 .full_match_start = full_match.start,
                 .full_match_len = full_match.len,
                 .recommendation = hints.lookup("config_check", token),
             });
+            try finding_tokens.append(alloc, token);
         }
+    }
+
+    // Second pass: redact every command against the full token set.
+    for (findings.items, finding_tokens.items) |*f, token| {
+        const redacted = try redact.redactCommand(e.command, finding_tokens.items, token, alloc);
+        f.redacted_cmd = redacted.text;
+        f.redacted_match_start = redacted.match_start;
+        f.redacted_match_len = redacted.match_len;
     }
 
     return findings.toOwnedSlice(alloc);
