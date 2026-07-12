@@ -6,24 +6,15 @@ const sources = @import("sources.zig");
 const entry_mod = @import("entry.zig");
 const finding_mod = @import("finding.zig");
 const scorer = @import("scorer.zig");
-const redact = @import("redact.zig");
 const report = @import("report.zig");
 const rules = @import("rules.zig");
-const hints = @import("hints.zig");
+const detect = @import("detect.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
 const jsonl_parser = @import("parsers/jsonl.zig");
 
-const detect_keys = @import("detect/private_keys.zig");
-const detect_assign = @import("detect/inline_assign.zig");
-const detect_auth = @import("detect/auth_header.zig");
-const detect_url = @import("detect/credential_url.zig");
-const detect_known = @import("detect/known_tokens.zig");
-
 const Entry = entry_mod.Entry;
-const Candidate = finding_mod.Candidate;
-const Finding = finding_mod.Finding;
 const Severity = finding_mod.Severity;
 
 pub fn main(init: std.process.Init) !void {
@@ -219,7 +210,7 @@ fn scanEntries(
     has_findings: *bool,
 ) !void {
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, entropy_threshold, rules_cache);
+        const findings = try detect.detectEntry(e, alloc, entropy_threshold, rules_cache);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(level)) continue;
@@ -228,135 +219,6 @@ fn scanEntries(
             try report.printFinding(stdout, f, report_opts);
         }
     }
-}
-
-fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache) ![]Finding {
-    var findings: std.ArrayList(Finding) = .empty;
-    var seen_tokens: std.ArrayList([]const u8) = .empty;
-    defer seen_tokens.deinit(alloc);
-    // The token behind each finding, aligned with `findings`. Every finding's
-    // command is redacted against the whole set so a command carrying more than
-    // one secret never leaks any of them.
-    var finding_tokens: std.ArrayList([]const u8) = .empty;
-    defer finding_tokens.deinit(alloc);
-
-    if (rules_cache) |cache| {
-        if (try cache.matchesAny(.ignore, e.command)) return findings.toOwnedSlice(alloc);
-    }
-
-    const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
-    // known_tokens runs last so that, when several detectors find the same
-    // token, the more specific det_type (auth_header, inline_assign, …) wins.
-    const detectors = [_]DetectFn{
-        detect_keys.detect,
-        detect_assign.detect,
-        detect_auth.detect,
-        detect_url.detect,
-        detect_known.detect,
-    };
-
-    for (detectors) |det| {
-        const candidates = try det(e, alloc);
-        defer alloc.free(candidates);
-        for (candidates) |c| {
-            var seen = false;
-            for (seen_tokens.items) |token| {
-                if (std.mem.eql(u8, token, c.token)) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (seen) continue;
-            try seen_tokens.append(alloc, c.token);
-
-            const s = scorer.score(c.signals, entropy_threshold);
-            const sev = scorer.severity(s);
-            const full_match = commandMatchSpan(e.command, c.token);
-            try findings.append(alloc, .{
-                .entry = e,
-                .det_type = c.det_type,
-                .severity = sev,
-                .score = s,
-                .redacted_cmd = "",
-                .full_match_start = full_match.start,
-                .full_match_len = full_match.len,
-                .recommendation = hints.lookup(c.det_type, c.token),
-            });
-            try finding_tokens.append(alloc, c.token);
-        }
-    }
-
-    if (rules_cache) |cache| {
-        var i: usize = 0;
-        while (i < cache.ruleCount()) : (i += 1) {
-            const rule = try cache.rule(i);
-            if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
-            const token = configCheckToken(rule, e.command) orelse rule.pattern;
-            if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;
-            const full_match = commandMatchSpan(e.command, token);
-            try findings.append(alloc, .{
-                .entry = e,
-                .det_type = "config_check",
-                .severity = .high,
-                .score = 7,
-                .redacted_cmd = "",
-                .full_match_start = full_match.start,
-                .full_match_len = full_match.len,
-                .recommendation = hints.lookup("config_check", token),
-            });
-            try finding_tokens.append(alloc, token);
-        }
-    }
-
-    // Second pass: redact every command against the full token set.
-    for (findings.items, finding_tokens.items) |*f, token| {
-        const redacted = try redact.redactCommand(e.command, finding_tokens.items, token, alloc);
-        f.redacted_cmd = redacted.text;
-        f.redacted_match_start = redacted.match_start;
-        f.redacted_match_len = redacted.match_len;
-    }
-
-    return findings.toOwnedSlice(alloc);
-}
-
-const MatchSpan = struct {
-    start: usize,
-    len: usize,
-};
-
-fn commandMatchSpan(command: []const u8, token: []const u8) MatchSpan {
-    if (token.len == 0) return .{ .start = 0, .len = 0 };
-    const start = std.mem.indexOf(u8, command, token) orelse return .{ .start = 0, .len = 0 };
-    return .{ .start = start, .len = token.len };
-}
-
-fn hasHighSeverityToken(findings: []const Finding, tokens: []const []const u8, token: []const u8) bool {
-    for (tokens, 0..) |seen, i| {
-        if (i >= findings.len) return false;
-        if (std.mem.eql(u8, seen, token) and findings[i].severity == .high) return true;
-    }
-    return false;
-}
-
-fn configCheckToken(rule: rules.Rule, text: []const u8) ?[]const u8 {
-    const idx = switch (rule.match_kind) {
-        .substring => std.mem.indexOf(u8, text, rule.pattern),
-        .exact => if (std.mem.eql(u8, text, rule.pattern)) @as(?usize, 0) else null,
-        .prefix => if (std.mem.startsWith(u8, text, rule.pattern)) @as(?usize, 0) else null,
-    } orelse return null;
-
-    var start = idx;
-    while (start > 0 and isConfigTokenChar(text[start - 1])) start -= 1;
-
-    var end = idx + rule.pattern.len;
-    while (end < text.len and isConfigTokenChar(text[end])) end += 1;
-
-    if (end <= start) return null;
-    return text[start..end];
-}
-
-fn isConfigTokenChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '/';
 }
 
 // Pull in tests from all submodules.
@@ -368,6 +230,7 @@ test {
     _ = @import("config.zig");
     _ = @import("rules.zig");
     _ = @import("sources.zig");
+    _ = @import("detect.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
@@ -394,7 +257,7 @@ test "explicit zsh-format fixture path preserves extended commands" {
     try std.testing.expectEqual(@as(usize, 1), entries.len);
     try std.testing.expectEqualStrings("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", entries[0].command);
 
-    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -412,7 +275,7 @@ test "duplicate token candidates collapse to one finding" {
         .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -437,7 +300,7 @@ test "environment entries are converted to assignments" {
     try std.testing.expectEqualStrings("<env>", entries[0].file);
     try std.testing.expectEqualStrings("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
 
-    const findings = try detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -483,7 +346,7 @@ test "compiled ignore rules suppress environment assignments" {
 
     var visible: usize = 0;
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
@@ -510,7 +373,7 @@ test "compiled match rules redact full token-like match" {
         .command = "CUSTOM_VALUE=zz9_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -534,7 +397,7 @@ test "known provider token takes precedence over config_check" {
         .command = "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -559,7 +422,7 @@ test "compiled match rules still report when inline assignment also matches" {
         .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -597,7 +460,7 @@ test "corpus true positives produce one visible finding per line" {
 
     var visible: usize = 0;
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
@@ -632,7 +495,7 @@ test "corpus false positives produce no visible findings" {
     }
 
     for (entries) |e| {
-        const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
