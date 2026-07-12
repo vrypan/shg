@@ -49,6 +49,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         try stderr.flush();
         std.process.exit(2);
     };
+    const detector_context = try detect.Context.init(alloc);
 
     const files = if (args.paths.len > 0)
         try sources.expandExplicitPaths(io, alloc, environ, args.paths)
@@ -68,7 +69,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     for (files) |path| {
         if (quit) break;
         const snapshot = readSnapshot(io, alloc, path) catch continue;
-        const cands = try collectCandidates(snapshot.bytes, path, alloc, cache, args.level);
+        const cands = try collectCandidates(snapshot.bytes, path, alloc, cache, args.level, &detector_context);
         if (cands.len == 0) continue;
         any_candidate = true;
         files_with += 1;
@@ -329,7 +330,7 @@ test "redrawText masks the entry and tags the outcome" {
     try std.testing.expect(std.mem.endsWith(u8, quit_text, "\u{2192} quit"));
 }
 
-fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocator, cache: rules.Cache, level: Severity) ![]Candidate {
+fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocator, cache: rules.Cache, level: Severity, detector_context: *const detect.Context) ![]Candidate {
     const is_fish = std.mem.indexOf(u8, path, "fish_history") != null;
 
     // Physical lines, 1-based: line L is `lines[L-1]`.
@@ -345,7 +346,7 @@ fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocat
     var seen_start: std.ArrayList(usize) = .empty;
 
     for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
+        const findings = try detect.detectEntryIndexed(e, alloc, scorer.default_entropy_threshold, cache, false, detector_context);
         var flagged = false;
         var red: []const u8 = e.command;
         for (findings) |f| {

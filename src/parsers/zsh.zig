@@ -23,27 +23,55 @@ pub fn parse(reader: *Io.Reader, filename: []const u8, alloc: std.mem.Allocator,
         const line = if (raw_line.len > 0 and raw_line[raw_line.len - 1] == '\r') raw_line[0 .. raw_line.len - 1] else raw_line;
         if (line.len == 0) continue;
 
-        var timestamp: ?i64 = null;
-        var command: []const u8 = line;
+        const parsed = parseLine(line);
 
-        if (std.mem.startsWith(u8, line, ": ")) {
-            if (parseExtended(line)) |parsed| {
-                timestamp = parsed.ts;
-                command = parsed.cmd;
-            }
-        }
-
-        const cmd = try alloc.dupe(u8, command);
+        const cmd = try alloc.dupe(u8, parsed.command);
         const raw = try alloc.dupe(u8, line);
         try entries.append(alloc, .{
             .file = filename,
             .line = line_no,
-            .timestamp = timestamp,
+            .timestamp = parsed.timestamp,
             .raw = raw,
             .command = cmd,
         });
     }
     return entries.toOwnedSlice(alloc);
+}
+
+pub fn parseEach(reader: *Io.Reader, filename: []const u8, skipped: *usize, consumer: anytype) !void {
+    var line_no: usize = 0;
+    while (true) {
+        const maybe_line = reader.takeDelimiter('\n') catch |err| switch (err) {
+            error.StreamTooLong => {
+                line_no += 1;
+                skipped.* += 1;
+                _ = reader.discardDelimiterInclusive('\n') catch break;
+                continue;
+            },
+            error.ReadFailed => return err,
+        };
+        const raw_line = maybe_line orelse break;
+        line_no += 1;
+        const line = if (raw_line.len > 0 and raw_line[raw_line.len - 1] == '\r') raw_line[0 .. raw_line.len - 1] else raw_line;
+        if (line.len == 0) continue;
+        const parsed = parseLine(line);
+        try consumer.consume(.{
+            .file = filename,
+            .line = line_no,
+            .timestamp = parsed.timestamp,
+            .raw = line,
+            .command = parsed.command,
+        });
+    }
+}
+
+const ParsedLine = struct { timestamp: ?i64, command: []const u8 };
+
+fn parseLine(line: []const u8) ParsedLine {
+    if (std.mem.startsWith(u8, line, ": ")) {
+        if (parseExtended(line)) |parsed| return .{ .timestamp = parsed.ts, .command = parsed.cmd };
+    }
+    return .{ .timestamp = null, .command = line };
 }
 
 const Parsed = struct { ts: i64, cmd: []const u8 };
@@ -66,7 +94,10 @@ test "zsh plain" {
     var skipped: usize = 0;
     const entries = try parse(&r, "test", alloc, &skipped);
     defer {
-        for (entries) |e| { alloc.free(e.command); alloc.free(e.raw); }
+        for (entries) |e| {
+            alloc.free(e.command);
+            alloc.free(e.raw);
+        }
         alloc.free(entries);
     }
     try std.testing.expectEqualStrings("ls -la", entries[0].command);
@@ -79,7 +110,10 @@ test "zsh extended" {
     var skipped: usize = 0;
     const entries = try parse(&r, "test", alloc, &skipped);
     defer {
-        for (entries) |e| { alloc.free(e.command); alloc.free(e.raw); }
+        for (entries) |e| {
+            alloc.free(e.command);
+            alloc.free(e.raw);
+        }
         alloc.free(entries);
     }
     try std.testing.expectEqualStrings("export API=secret", entries[0].command);

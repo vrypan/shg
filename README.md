@@ -61,6 +61,16 @@ zig build
 # binaries at zig-out/bin/shg and zig-out/bin/shg-config
 ```
 
+To run the deterministic scan benchmark:
+
+```sh
+zig build bench
+SHG_BENCH_LINES=500000 zig build bench
+```
+
+The benchmark generates a temporary history of unique, non-sensitive commands
+and reports wall, user, and system time. `SHG_BENCH_LINES` defaults to 100000.
+
 ## Usage
 
 ```

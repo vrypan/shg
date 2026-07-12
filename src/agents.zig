@@ -52,6 +52,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         try stderr.flush();
         std.process.exit(2);
     };
+    const detector_context = try detect.Context.init(alloc);
 
     // Discovery is bounded: explicit --path arguments, or the compiled
     // deep_path rules (paths.deep.*.shg). Never a disk crawl.
@@ -64,7 +65,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     var file_count: usize = 0;
     var malformed_total: usize = 0;
     for (files) |path| {
-        const outcome = try scanFile(io, alloc, path, args, cache);
+        const outcome = try scanFile(io, alloc, path, args, cache, &detector_context);
         if (outcome.malformed > 0) {
             malformed_total += outcome.malformed;
             try stderr.interface.print("shg: warning: {s}: skipped {d} malformed JSONL record(s)\n", .{ path, outcome.malformed });
@@ -92,7 +93,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     if (total_secrets > 0) std.process.exit(1);
 }
 
-fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, cache: rules.Cache) !ScanOutcome {
+fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, cache: rules.Cache, detector_context: *const detect.Context) !ScanOutcome {
     const bytes = try readFile(io, alloc, path);
     const format = formats.formatForPath(path);
     var malformed: usize = 0;
@@ -109,7 +110,7 @@ fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, 
             .raw = piece.text,
             .command = piece.text,
         };
-        const findings = try detect.detectEntry(entry, alloc, args.entropy_threshold, cache, true);
+        const findings = try detect.detectEntryIndexed(entry, alloc, args.entropy_threshold, cache, true, detector_context);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(args.level)) continue;

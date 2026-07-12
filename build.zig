@@ -71,4 +71,11 @@ pub fn build(b: *std.Build) void {
     smoke_cmd.setEnvironmentVariable("SHG_CONFIG_BIN", b.getInstallPath(.bin, "shg-config"));
     const smoke_step = b.step("smoke", "Run end-to-end smoke tests");
     smoke_step.dependOn(&smoke_cmd.step);
+
+    const bench_cmd = b.addSystemCommand(&.{ "sh", "tests/benchmark.sh" });
+    bench_cmd.step.dependOn(b.getInstallStep());
+    bench_cmd.setEnvironmentVariable("SHG_BIN", b.getInstallPath(.bin, "shg"));
+    bench_cmd.setEnvironmentVariable("SHG_CONFIG_BIN", b.getInstallPath(.bin, "shg-config"));
+    const bench_step = b.step("bench", "Benchmark scan throughput on a deterministic corpus");
+    bench_step.dependOn(&bench_cmd.step);
 }

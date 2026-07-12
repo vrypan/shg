@@ -45,6 +45,47 @@ pub fn parse(reader: *Io.Reader, filename: []const u8, alloc: std.mem.Allocator,
     return entries.toOwnedSlice(alloc);
 }
 
+pub fn parseEach(reader: *Io.Reader, filename: []const u8, alloc: std.mem.Allocator, skipped: *usize, consumer: anytype) !void {
+    var line_no: usize = 0;
+    var cur_cmd: std.ArrayList(u8) = .empty;
+    defer cur_cmd.deinit(alloc);
+    var has_cmd = false;
+    var cur_ts: ?i64 = null;
+    var cur_line: usize = 0;
+
+    while (true) {
+        const maybe_line = reader.takeDelimiter('\n') catch |err| switch (err) {
+            error.StreamTooLong => {
+                line_no += 1;
+                skipped.* += 1;
+                _ = reader.discardDelimiterInclusive('\n') catch break;
+                continue;
+            },
+            error.ReadFailed => return err,
+        };
+        const raw_line = maybe_line orelse break;
+        line_no += 1;
+        const line = if (raw_line.len > 0 and raw_line[raw_line.len - 1] == '\r') raw_line[0 .. raw_line.len - 1] else raw_line;
+
+        if (std.mem.startsWith(u8, line, "- cmd: ")) {
+            if (has_cmd) {
+                try consumer.consume(.{ .file = filename, .line = cur_line, .timestamp = cur_ts, .raw = cur_cmd.items, .command = cur_cmd.items });
+            }
+            cur_cmd.clearRetainingCapacity();
+            try cur_cmd.appendSlice(alloc, line[7..]);
+            has_cmd = true;
+            cur_ts = null;
+            cur_line = line_no;
+        } else if (std.mem.startsWith(u8, line, "  when: ")) {
+            cur_ts = std.fmt.parseInt(i64, line[8..], 10) catch null;
+        }
+    }
+
+    if (has_cmd) {
+        try consumer.consume(.{ .file = filename, .line = cur_line, .timestamp = cur_ts, .raw = cur_cmd.items, .command = cur_cmd.items });
+    }
+}
+
 test "fish parser" {
     const alloc = std.testing.allocator;
     const input =

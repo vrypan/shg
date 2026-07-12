@@ -82,6 +82,19 @@ fn run(init: std.process.Init) !void {
         try stderr.flush();
         std.process.exit(2);
     }
+    const detector_context = try detect.Context.init(arena_alloc);
+    var entry_scanner = EntryScanner{
+        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .entropy_threshold = args.entropy_threshold,
+        .level = args.level,
+        .report_opts = report_opts,
+        .rules_cache = rules_cache.?,
+        .detector_context = &detector_context,
+        .stdout = &stdout,
+        .counts = &counts,
+        .has_findings = &has_findings,
+    };
+    defer entry_scanner.scratch.deinit();
 
     // Stdin is scanned only when explicitly requested with --stdin. There is no
     // auto-detection: a stray pipe (an empty pipe in CI, a hook, /dev/null) must
@@ -94,9 +107,8 @@ fn run(init: std.process.Init) !void {
         var read_buf: [65536]u8 = undefined;
         var reader = Io.File.stdin().readerStreaming(io, &read_buf);
         var skipped: usize = 0;
-        const entries = try history_parse.parseFile(&reader.interface, "<stdin>", a, &skipped);
+        try history_parse.parseEach(&reader.interface, "<stdin>", a, &skipped, &entry_scanner);
         warnSkippedLines(io, "<stdin>", skipped);
-        try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
     if (args.scan_hist) {
@@ -114,8 +126,6 @@ fn run(init: std.process.Init) !void {
                 file_stderr.flush() catch {};
                 continue;
             };
-            defer file.close(io);
-
             var arena = std.heap.ArenaAllocator.init(gpa);
             defer arena.deinit();
             const a = arena.allocator();
@@ -125,17 +135,19 @@ fn run(init: std.process.Init) !void {
             var skipped: usize = 0;
             // A path that opens but cannot be read (e.g. a directory, or a
             // transient error) is skipped rather than aborting the whole scan.
-            const entries = history_parse.parseFile(&reader.interface, path, a, &skipped) catch |err| {
-                if (err != error.FileNotFound and err != error.AccessDenied) {
+            history_parse.parseEach(&reader.interface, path, a, &skipped, &entry_scanner) catch |err| {
+                file.close(io);
+                if (err == error.FileNotFound or err == error.AccessDenied or err == error.ReadFailed) {
                     var perr_buf: [4096]u8 = undefined;
                     var perr = Io.File.stderr().writerStreaming(io, &perr_buf);
                     perr.interface.print("shg: cannot read {s}: {t}\n", .{ path, err }) catch {};
                     perr.flush() catch {};
+                    continue;
                 }
-                continue;
+                return err;
             };
+            file.close(io);
             warnSkippedLines(io, path, skipped);
-            try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
         }
     }
 
@@ -144,7 +156,7 @@ fn run(init: std.process.Init) !void {
         defer arena.deinit();
         const a = arena.allocator();
         const entries = try parseEnv(init.environ_map, a);
-        try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
+        for (entries) |entry| try entry_scanner.consume(entry);
     }
 
     if (args.summary) {
@@ -202,28 +214,30 @@ fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) !
     return entries.toOwnedSlice(alloc);
 }
 
-fn scanEntries(
-    entries: []const Entry,
-    alloc: std.mem.Allocator,
+const EntryScanner = struct {
+    scratch: std.heap.ArenaAllocator,
     entropy_threshold: f64,
     level: Severity,
     report_opts: report.Options,
-    rules_cache: ?rules.Cache,
+    rules_cache: rules.Cache,
+    detector_context: *const detect.Context,
     stdout: *Io.File.Writer,
     counts: *[4]usize,
     has_findings: *bool,
-) !void {
-    for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, entropy_threshold, rules_cache, false);
+
+    pub fn consume(self: *EntryScanner, e: Entry) !void {
+        const alloc = self.scratch.allocator();
+        defer _ = self.scratch.reset(.retain_capacity);
+        const findings = try detect.detectEntryIndexed(e, alloc, self.entropy_threshold, self.rules_cache, false, self.detector_context);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
-            if (@intFromEnum(f.severity) < @intFromEnum(level)) continue;
-            has_findings.* = true;
-            counts[@intFromEnum(f.severity)] += 1;
-            try report.printFinding(stdout, f, report_opts);
+            if (@intFromEnum(f.severity) < @intFromEnum(self.level)) continue;
+            self.has_findings.* = true;
+            self.counts[@intFromEnum(f.severity)] += 1;
+            try report.printFinding(self.stdout, f, self.report_opts);
         }
     }
-}
+};
 
 // Pull in tests from all submodules.
 test {

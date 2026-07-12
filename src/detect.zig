@@ -18,11 +18,31 @@ const Candidate = finding_mod.Candidate;
 const Finding = finding_mod.Finding;
 const Severity = finding_mod.Severity;
 
+pub const Context = struct {
+    known_prefixes: detect_known.PrefixIndex,
+
+    pub fn init(alloc: std.mem.Allocator) !Context {
+        return .{ .known_prefixes = try detect_known.PrefixIndex.init(alloc) };
+    }
+
+    pub fn deinit(self: Context, alloc: std.mem.Allocator) void {
+        self.known_prefixes.deinit(alloc);
+    }
+};
+
 /// Detect secrets in one entry. When `deep` is true, the deep-scoped rule
 /// kinds (deep_ignore / deep_check) are honoured in addition to the general
 /// ones, so `shg deep` can suppress or match transcript-specific patterns
 /// without affecting `scan`.
 pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, deep: bool) ![]Finding {
+    return detectEntryInternal(e, alloc, entropy_threshold, rules_cache, deep, null);
+}
+
+pub fn detectEntryIndexed(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, deep: bool, context: *const Context) ![]Finding {
+    return detectEntryInternal(e, alloc, entropy_threshold, rules_cache, deep, context);
+}
+
+fn detectEntryInternal(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, deep: bool, context: ?*const Context) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
     defer seen_tokens.deinit(alloc);
@@ -45,39 +65,20 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
         detect_assign.detect,
         detect_auth.detect,
         detect_url.detect,
-        detect_known.detect,
     };
 
     for (detectors) |det| {
         const candidates = try det(e, alloc);
         defer alloc.free(candidates);
-        for (candidates) |c| {
-            var seen = false;
-            for (seen_tokens.items) |token| {
-                if (std.mem.eql(u8, token, c.token)) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (seen) continue;
-            try seen_tokens.append(alloc, c.token);
-
-            const s = scorer.score(c.signals, entropy_threshold);
-            const sev = scorer.severity(s);
-            const full_match = commandMatchSpan(e.command, c.token);
-            try findings.append(alloc, .{
-                .entry = e,
-                .det_type = c.det_type,
-                .severity = sev,
-                .score = s,
-                .redacted_cmd = "",
-                .full_match_start = full_match.start,
-                .full_match_len = full_match.len,
-                .recommendation = hints.lookup(c.det_type, c.token),
-            });
-            try finding_tokens.append(alloc, c.token);
-        }
+        try appendCandidates(e, alloc, entropy_threshold, candidates, &findings, &seen_tokens, &finding_tokens);
     }
+
+    const known_candidates = if (context) |ctx|
+        try detect_known.detectIndexed(e, alloc, &ctx.known_prefixes)
+    else
+        try detect_known.detect(e, alloc);
+    defer alloc.free(known_candidates);
+    try appendCandidates(e, alloc, entropy_threshold, known_candidates, &findings, &seen_tokens, &finding_tokens);
 
     if (rules_cache) |cache| {
         var i: usize = 0;
@@ -111,6 +112,42 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
     }
 
     return findings.toOwnedSlice(alloc);
+}
+
+fn appendCandidates(
+    e: Entry,
+    alloc: std.mem.Allocator,
+    entropy_threshold: f64,
+    candidates: []const Candidate,
+    findings: *std.ArrayList(Finding),
+    seen_tokens: *std.ArrayList([]const u8),
+    finding_tokens: *std.ArrayList([]const u8),
+) !void {
+    for (candidates) |c| {
+        var seen = false;
+        for (seen_tokens.items) |token| {
+            if (std.mem.eql(u8, token, c.token)) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        try seen_tokens.append(alloc, c.token);
+
+        const s = scorer.score(c.signals, entropy_threshold);
+        const full_match = commandMatchSpan(e.command, c.token);
+        try findings.append(alloc, .{
+            .entry = e,
+            .det_type = c.det_type,
+            .severity = scorer.severity(s),
+            .score = s,
+            .redacted_cmd = "",
+            .full_match_start = full_match.start,
+            .full_match_len = full_match.len,
+            .recommendation = hints.lookup(c.det_type, c.token),
+        });
+        try finding_tokens.append(alloc, c.token);
+    }
 }
 
 pub const MatchSpan = struct {
@@ -194,6 +231,38 @@ test "compiled match rules redact full token-like match" {
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqualStrings("config_check", findings[0].det_type);
     try std.testing.expect(std.mem.indexOf(u8, findings[0].redacted_cmd, "abcdefghijklmnopqrstuvwxyz012345") == null);
+}
+
+test "indexed detection matches legacy detection" {
+    const alloc = std.testing.allocator;
+    const context = try Context.init(alloc);
+    defer context.deinit(alloc);
+    const commands = [_][]const u8{
+        "git status --short",
+        "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
+        "export API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+        "curl -H 'Authorization: Bearer token-value-abcdefghijklmnopqrstuvwxyz' example.test",
+        "psql postgres://admin:highentropyvalue12345@db.internal/prod",
+    };
+    for (commands) |command| {
+        const entry = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = command, .command = command };
+        const legacy = try detectEntry(entry, alloc, scorer.default_entropy_threshold, null, false);
+        defer {
+            for (legacy) |finding| alloc.free(finding.redacted_cmd);
+            alloc.free(legacy);
+        }
+        const indexed = try detectEntryIndexed(entry, alloc, scorer.default_entropy_threshold, null, false, &context);
+        defer {
+            for (indexed) |finding| alloc.free(finding.redacted_cmd);
+            alloc.free(indexed);
+        }
+        try std.testing.expectEqual(legacy.len, indexed.len);
+        for (legacy, indexed) |a, b| {
+            try std.testing.expectEqualStrings(a.det_type, b.det_type);
+            try std.testing.expectEqual(a.severity, b.severity);
+            try std.testing.expectEqualStrings(a.redacted_cmd, b.redacted_cmd);
+        }
+    }
 }
 
 test "known provider token takes precedence over config_check" {
