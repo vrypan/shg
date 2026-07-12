@@ -231,6 +231,7 @@ test {
     _ = @import("rules.zig");
     _ = @import("sources.zig");
     _ = @import("detect.zig");
+    _ = @import("agent_formats.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
