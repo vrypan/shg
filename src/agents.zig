@@ -99,6 +99,11 @@ fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, 
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(args.level)) continue;
+            // Strict by default: transcripts are a haystack of code, so only
+            // the format-specific / user-defined detectors fire unless
+            // --thorough. The loose detectors (inline_assign, auth_header, …)
+            // are the source of code false positives here.
+            if (!args.thorough and !isHighConfidence(f.det_type)) continue;
 
             const key: []const u8 = if (f.full_match_len > 0)
                 piece.text[f.full_match_start..][0..f.full_match_len]
@@ -149,6 +154,28 @@ fn scanned(source: Source, all_content: bool) bool {
         .user_input, .tool_call, .tool_output => true,
         .assistant, .reasoning => all_content,
     };
+}
+
+// High-confidence detectors: format-specific (known_token, private_key,
+// ssh_key) or user-defined (config_check). The loose value/keyword detectors
+// are excluded from the strict default because they false-positive on code.
+fn isHighConfidence(det_type: []const u8) bool {
+    const allow = [_][]const u8{ "known_token", "private_key", "ssh_key", "config_check" };
+    for (allow) |a| {
+        if (std.mem.eql(u8, det_type, a)) return true;
+    }
+    return false;
+}
+
+test "isHighConfidence allows format-specific and config detectors only" {
+    try std.testing.expect(isHighConfidence("known_token"));
+    try std.testing.expect(isHighConfidence("private_key"));
+    try std.testing.expect(isHighConfidence("ssh_key"));
+    try std.testing.expect(isHighConfidence("config_check"));
+    try std.testing.expect(!isHighConfidence("inline_assign"));
+    try std.testing.expect(!isHighConfidence("auth_header"));
+    try std.testing.expect(!isHighConfidence("credential_url"));
+    try std.testing.expect(!isHighConfidence("cli_flag_secret"));
 }
 
 fn reportHuman(stdout: *Io.File.Writer, results: []const FileResult, total: usize, files: usize, color: bool) !void {
