@@ -20,6 +20,12 @@ const Candidate = struct {
     redacted: []const u8,
 };
 
+const Decision = enum {
+    keep,
+    remove,
+    quit,
+};
+
 pub fn run(init: std.process.Init, args: cli.Args) !void {
     const io = init.io;
     const alloc = init.arena.allocator();
@@ -51,8 +57,10 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     var any_candidate = false;
     var total: usize = 0;
     var files_with: usize = 0;
+    var quit = false;
 
     for (files) |path| {
+        if (quit) break;
         const bytes = readFile(io, alloc, path) catch continue;
         const cands = try collectCandidates(bytes, path, alloc, cache, args.level);
         if (cands.len == 0) continue;
@@ -72,11 +80,18 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         // confirmed line spans, then rewrite the file once.
         var spans: std.ArrayList([2]usize) = .empty;
         for (cands) |c| {
-            const confirm = if (args.yes)
-                true
+            const decision = if (args.yes)
+                Decision.remove
             else
                 try promptRemove(alloc, &stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
-            if (confirm) try spans.append(alloc, .{ c.start, c.end });
+            switch (decision) {
+                .keep => {},
+                .remove => try spans.append(alloc, .{ c.start, c.end }),
+                .quit => {
+                    quit = true;
+                    break;
+                },
+            }
         }
         if (spans.items.len == 0) continue;
         try rewriteFile(io, alloc, path, bytes, spans.items);
@@ -99,31 +114,41 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 // Show a candidate and ask whether to remove it. After the answer, on a TTY and
 // when the value was shown in full, redraw the entry line in place with the
 // secret redacted so scrollback never accumulates full secrets.
-fn promptRemove(alloc: std.mem.Allocator, stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c: Candidate, redacted: bool, is_tty: bool) !bool {
+fn promptRemove(alloc: std.mem.Allocator, stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c: Candidate, redacted: bool, is_tty: bool) !Decision {
     const w = &stdout.interface;
     const shown = if (redacted) c.redacted else c.full;
     try w.print("{s}:{d}  {s}\n", .{ path, c.start, shown });
-    try w.writeAll("Remove this entry? [y/N] ");
+    try w.writeAll("Remove this entry? [y/N/q] ");
     try stdout.flush();
 
-    const line = (stdin.takeDelimiter('\n') catch return false) orelse return false;
+    const line = (stdin.takeDelimiter('\n') catch return .keep) orelse return .keep;
     const ans = std.mem.trim(u8, line, " \t\r\n");
-    const yes = std.ascii.eqlIgnoreCase(ans, "y") or std.ascii.eqlIgnoreCase(ans, "yes");
+    const decision: Decision =
+        if (std.ascii.eqlIgnoreCase(ans, "y") or std.ascii.eqlIgnoreCase(ans, "yes"))
+            .remove
+        else if (std.ascii.eqlIgnoreCase(ans, "q") or std.ascii.eqlIgnoreCase(ans, "quit"))
+            .quit
+        else
+            .keep;
 
     if (is_tty and !redacted) {
         // Cursor is one row below the prompt: up 2 to the entry row, clear it,
         // reprint the masked entry + outcome, back down 2.
-        const masked = try redrawText(alloc, path, c.start, c.redacted, yes);
+        const masked = try redrawText(alloc, path, c.start, c.redacted, decision);
         try w.print("\x1b[2A\r\x1b[2K{s}\x1b[2B\r", .{masked});
         try stdout.flush();
     }
-    return yes;
+    return decision;
 }
 
 // The line reprinted in place of a decided entry: the redacted command and the
 // outcome, never the full secret.
-fn redrawText(alloc: std.mem.Allocator, path: []const u8, start: usize, redacted: []const u8, yes: bool) ![]const u8 {
-    const tag = if (yes) "\u{2192} removed" else "\u{2192} kept";
+fn redrawText(alloc: std.mem.Allocator, path: []const u8, start: usize, redacted: []const u8, decision: Decision) ![]const u8 {
+    const tag = switch (decision) {
+        .keep => "\u{2192} kept",
+        .remove => "\u{2192} removed",
+        .quit => "\u{2192} quit",
+    };
     return std.fmt.allocPrint(alloc, "{s}:{d}  {s}  {s}", .{ path, start, redacted, tag });
 }
 
@@ -242,12 +267,15 @@ test "singleLine collapses control characters to spaces" {
 
 test "redrawText masks the entry and tags the outcome" {
     const alloc = std.testing.allocator;
-    const removed = try redrawText(alloc, "/h", 2, "echo ghp_****", true);
+    const removed = try redrawText(alloc, "/h", 2, "echo ghp_****", .remove);
     defer alloc.free(removed);
     try std.testing.expectEqualStrings("/h:2  echo ghp_****  \u{2192} removed", removed);
-    const kept = try redrawText(alloc, "/h", 5, "x", false);
+    const kept = try redrawText(alloc, "/h", 5, "x", .keep);
     defer alloc.free(kept);
     try std.testing.expect(std.mem.endsWith(u8, kept, "\u{2192} kept"));
+    const quit_text = try redrawText(alloc, "/h", 8, "x", .quit);
+    defer alloc.free(quit_text);
+    try std.testing.expect(std.mem.endsWith(u8, quit_text, "\u{2192} quit"));
 }
 
 fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocator, cache: rules.Cache, level: Severity) ![]Candidate {

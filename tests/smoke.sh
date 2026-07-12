@@ -291,6 +291,23 @@ ls "$fixf".shg-backup* "$fixf".shg-tmp* 2>/dev/null && { printf '%s\n' "fix left
 if grep -rq "$fix_tok" "$tmp" 2>/dev/null; then printf '%s\n' "the secret survives in some file" >&2; exit 1; fi
 say "PASS shg fix --yes removes the entry, no backup, no leak"
 
+say "TEST shg fix interactive q applies confirmed removals and stops"
+quitf=$tmp/fix_quit_history
+quit_tok_a=ghp_fixquitaabcdefghijklmnopqrstuvwxyz987654
+quit_tok_b=ghp_fixquitbabcdefghijklmnopqrstuvwxyz987654
+quit_tok_c=ghp_fixquitcabcdefghijklmnopqrstuvwxyz987654
+printf 'echo %s\necho %s\necho %s\n' "$quit_tok_a" "$quit_tok_b" "$quit_tok_c" > "$quitf"
+run_capture sh -c 'printf "y\nq\n" | env XDG_CONFIG_HOME="$1" "$2" fix --path "$3"' sh "$xdg" "$shg" "$quitf"
+test "$status" -eq 1
+if grep -q "$quit_tok_a" "$quitf"; then printf '%s\n' "fix q did not apply confirmed removal" >&2; exit 1; fi
+grep -q "$quit_tok_b" "$quitf"
+grep -q "$quit_tok_c" "$quitf"
+if printf '%s\n' "$output" | grep -q "$quit_tok_c"; then
+    printf '%s\n' "fix q continued after quit" >&2
+    exit 1
+fi
+say "PASS shg fix interactive q applies confirmed removals and stops"
+
 say "TEST shg fix --yes removes an entire fish history block"
 fishf=$tmp/fish_history
 fish_tok=ghp_bcdefghijklmnopqrstuvwxyz012345

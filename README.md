@@ -183,7 +183,9 @@ Options:
 `shg fix` re-scans history files and removes confirmed entries from those
 files. It is interactive by default: each candidate is shown in full so you can
 judge it before deleting; pass `--redacted` when screen-sharing or recording.
-Use `--dry-run` to preview without changing files.
+Use `--dry-run` to preview without changing files. At the prompt, answer `y` to
+remove the entry, Enter or `n` to keep it, or `q` to apply already confirmed
+removals and stop.
 
 When an entry is removed, `shg fix` rewrites the file through an atomic temp
 file and rename. It intentionally creates no backup, because a backup would be

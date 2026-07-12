@@ -135,7 +135,8 @@ const fix_spec = zecli.CommandSpec{
     .flags       = &fix_flags,
     .extra_help  =
         \\
-        \\Shows each flagged entry and asks before removing it. The write is
+        \\Shows each flagged entry and asks before removing it. Answer q to quit
+        \\after applying already confirmed removals. The write is
         \\atomic and no backup is made (a backup would replicate the secret).
         \\Use --dry-run to preview, --yes to remove all without prompting.
         \\
