@@ -41,7 +41,7 @@ test -s "$xdg/shg/ignore.default.shg"
 test -s "$xdg/shg/match.default.shg"
 test -s "$xdg/shg/paths.default.shg"
 grep -q 'prefix:SSH_AUTH_SOCK=' "$xdg/shg/ignore.default.shg"
-grep -q 'ghp_' "$xdg/shg/match.default.shg"
+grep -q 'PRIVATE KEY' "$xdg/shg/match.default.shg"
 grep -q '~/.zsh_history' "$xdg/shg/paths.default.shg"
 printf '%s\n' 'custom-default-content' > "$xdg/shg/match.default.shg"
 run_capture sh -c 'printf "n\nn\nn\n" | env XDG_CONFIG_HOME="$1" "$2" defaults' sh "$xdg" "$shg_config"
@@ -49,7 +49,7 @@ test "$status" -eq 0
 grep -q 'custom-default-content' "$xdg/shg/match.default.shg"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" defaults -y
 test "$status" -eq 0
-grep -q 'ghp_' "$xdg/shg/match.default.shg"
+grep -q 'PRIVATE KEY' "$xdg/shg/match.default.shg"
 if grep -q 'custom-default-content' "$xdg/shg/match.default.shg"; then
     printf '%s\n' "defaults -y did not overwrite existing file" >&2
     exit 1

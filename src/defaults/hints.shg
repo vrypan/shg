@@ -20,6 +20,8 @@ prefix:github_pat_	GitHub fine-grained personal access token — rotate at githu
 prefix:ghp_	GitHub personal access token — rotate at github.com/settings/tokens
 prefix:ghs_	GitHub App installation token — rotate at github.com/settings/installations
 prefix:gho_	GitHub OAuth token — rotate at github.com/settings/applications
+prefix:ghu_	GitHub user-to-server token — rotate at github.com/settings/apps
+prefix:ghr_	GitHub refresh token — rotate at github.com/settings/apps
 
 # GitLab
 prefix:glpat-	GitLab personal access token — rotate at gitlab.com/-/user_settings/personal_access_tokens
@@ -27,16 +29,21 @@ prefix:glpat-	GitLab personal access token — rotate at gitlab.com/-/user_setti
 # Slack
 prefix:xoxb-	Slack bot token — rotate at api.slack.com/apps
 prefix:xoxp-	Slack user token — rotate at api.slack.com/apps
+prefix:xapp-	Slack app-level token — rotate at api.slack.com/apps
+prefix:xwfp-	Slack workflow token — rotate at api.slack.com/apps
 
 # AWS
 prefix:AKIA	AWS access key ID — rotate in the AWS IAM console (iam.aws.amazon.com)
 prefix:ABSK	AWS Bedrock API key — rotate in the AWS IAM console
+prefix:ASIA	AWS temporary access key ID — rotate via AWS STS / IAM console
 
 # Stripe
 prefix:sk_live_	Stripe live secret key — rotate at dashboard.stripe.com/apikeys
 prefix:sk_test_	Stripe test secret key — rotate at dashboard.stripe.com/apikeys
 prefix:rk_live_	Stripe live restricted key — rotate at dashboard.stripe.com/apikeys
 prefix:whsec_	Stripe webhook secret — rotate at dashboard.stripe.com/webhooks
+prefix:rk_test_	Stripe test restricted key — rotate at dashboard.stripe.com/apikeys
+prefix:sk_org_	Stripe organization key — rotate at dashboard.stripe.com/apikeys
 
 # Google
 prefix:AIza	Google API key — rotate at console.cloud.google.com/apis/credentials

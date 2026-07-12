@@ -251,6 +251,11 @@ Ignore rules take precedence over match rules. If the same text appears in both
 `match.default.shg` and `ignore.my.shg`, the matching command is suppressed and
 does not produce a finding.
 
+Known provider token prefixes (`ghp_`, `sk-ant-`, `AKIA`, …) are detected
+natively by the `known_token` detector, which applies token-boundary and
+length checks that plain substring rules cannot. `match.*.shg` is therefore
+for additional custom patterns of your own.
+
 > [!NOTE]
 > `match.default.shg` is based on https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
 
