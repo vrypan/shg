@@ -9,7 +9,7 @@ tap_repo="homebrew-tap"
 tap_branch="main"
 formula_name="shg"
 homepage="https://github.com/${owner}/${repo}"
-description="Scan shell history files for accidentally persisted secrets."
+description="Scan histories, environment, and AI agent transcripts for secrets."
 license_name="MIT"
 commit_name="Panagiotis Vryonis"
 commit_email="58812+vrypan@users.noreply.github.com"
@@ -51,7 +51,8 @@ class Shg < Formula
     (share/"shg/extras").install Dir["extras/*"]
     (share/"shg/defaults").install "src/defaults/ignore.default.shg",
                                    "src/defaults/match.default.shg",
-                                   "src/defaults/paths.default.shg"
+                                   "src/defaults/paths.default.shg",
+                                   "src/defaults/paths.deep.default.shg"
   end
 
   test do
