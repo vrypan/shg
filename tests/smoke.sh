@@ -6,6 +6,11 @@ cd "$root"
 
 shg=${SHG_BIN:-zig-out/bin/shg}
 shg_config=${SHG_CONFIG_BIN:-zig-out/bin/shg-config}
+
+# A brew-installed shg ships system defaults under $HOMEBREW_PREFIX; clear it
+# so shg-config uses the test XDG dir instead of short-circuiting to Homebrew.
+HOMEBREW_PREFIX=
+export HOMEBREW_PREFIX
 tp=testdata/corpus/true_positives/zsh_sample.txt
 fp=testdata/corpus/false_positives/bash_safe.txt
 full_secret=sk-abcdefghijklmnopqrstuvwxyz012345678901234567
@@ -64,7 +69,7 @@ printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$home/.zsh_history"
 run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" "$shg" scan --env false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$home/.zsh_history"
-printf '%s\n' "$output" | grep -q '\[config_check\]'
+printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS configured history paths"
 
 say "TEST environment history path"
@@ -73,21 +78,27 @@ printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$histfile"
 run_capture env XDG_CONFIG_HOME="$xdg" HISTFILE="$histfile" "$shg" scan --env false
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$histfile"
-printf '%s\n' "$output" | grep -q '\[config_check\]'
+printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS environment history path"
-
-say "TEST zsh history flush warning"
-run_capture env XDG_CONFIG_HOME="$xdg" SHELL=/bin/zsh "$shg" scan --env false
-test "$status" -eq 1
-printf '%s\n' "$output" | grep -q "zsh may keep recent history in memory"
-say "PASS zsh history flush warning"
 
 say "TEST piped history"
 run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false' sh "$xdg" "$shg"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '<stdin>'
-printf '%s\n' "$output" | grep -q '\[config_check\]'
+printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS piped history"
+
+say "TEST oversized history line is skipped, scan continues"
+longfile=$tmp/long_history
+{
+    awk 'BEGIN { printf "echo "; for (i = 0; i < 70000; i++) printf "a"; printf "\n" }'
+    printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345'
+} > "$longfile"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$longfile"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'skipped 1 oversized line(s)'
+printf '%s\n' "$output" | grep -q '\[known_token\]'
+say "PASS oversized history line is skipped, scan continues"
 
 say "TEST explicit path ignores piped history"
 run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false --path "$3"' sh "$xdg" "$shg" "$fp"

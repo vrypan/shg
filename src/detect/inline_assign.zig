@@ -22,55 +22,61 @@ const search_commands = [_][]const u8{
 pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
     var results: std.ArrayList(Candidate) = .empty;
     const cmd = e.command;
-
-    const assignment = findAssignment(cmd) orelse return results.toOwnedSlice(alloc);
-
-    const var_lower = try std.ascii.allocLowerString(alloc, assignment.name);
-    defer alloc.free(var_lower);
-
-    var keyword_match = false;
-    for (sensitive_keywords) |kw| {
-        if (std.mem.indexOf(u8, var_lower, kw) != null) { keyword_match = true; break; }
-    }
-    if (!keyword_match) return results.toOwnedSlice(alloc);
-
-    const token = stripQuotes(assignment.value);
+    const stripped = stripLeadingKeyword(cmd);
 
     const is_search = blk: {
         for (search_commands) |sc| { if (std.mem.startsWith(u8, cmd, sc)) break :blk true; }
         break :blk false;
     };
 
-    const is_placeholder = blk: {
-        if (token.len == 0) break :blk true;
-        const tok_lower = try std.ascii.allocLowerString(alloc, token);
-        defer alloc.free(tok_lower);
-        for (placeholder_values) |pv| { if (std.mem.startsWith(u8, tok_lower, pv)) break :blk true; }
-        break :blk false;
-    };
+    // A single command can carry several assignments (FOO=bar API_KEY=... cmd);
+    // examine every one, not just the first.
+    var search_start: usize = 0;
+    while (findAssignment(stripped, search_start)) |assignment| {
+        search_start = assignment.end;
 
-    try results.append(alloc, .{
-        .token = token,
-        .det_type = "inline_assign",
-        .signals = .{
-            .has_sensitive_keyword = true,
-            .is_search_command = is_search,
-            .is_placeholder = is_placeholder,
-            .token_len = token.len,
-            .entropy = entropy.shannon(token),
-        },
-    });
+        const var_lower = try std.ascii.allocLowerString(alloc, assignment.name);
+        defer alloc.free(var_lower);
+
+        var keyword_match = false;
+        for (sensitive_keywords) |kw| {
+            if (std.mem.indexOf(u8, var_lower, kw) != null) { keyword_match = true; break; }
+        }
+        if (!keyword_match) continue;
+
+        const token = stripQuotes(assignment.value);
+
+        const is_placeholder = blk: {
+            if (token.len == 0) break :blk true;
+            const tok_lower = try std.ascii.allocLowerString(alloc, token);
+            defer alloc.free(tok_lower);
+            for (placeholder_values) |pv| { if (std.mem.startsWith(u8, tok_lower, pv)) break :blk true; }
+            break :blk false;
+        };
+
+        try results.append(alloc, .{
+            .token = token,
+            .det_type = "inline_assign",
+            .signals = .{
+                .has_sensitive_keyword = true,
+                .is_search_command = is_search,
+                .is_placeholder = is_placeholder,
+                .token_len = token.len,
+                .entropy = entropy.shannon(token),
+            },
+        });
+    }
     return results.toOwnedSlice(alloc);
 }
 
 const Assignment = struct {
     name: []const u8,
     value: []const u8,
+    end: usize,
 };
 
-fn findAssignment(cmd: []const u8) ?Assignment {
-    const stripped = stripLeadingKeyword(cmd);
-    var search_start: usize = 0;
+fn findAssignment(stripped: []const u8, from: usize) ?Assignment {
+    var search_start = from;
     while (std.mem.indexOfScalarPos(u8, stripped, search_start, '=')) |eq| {
         const name = assignmentName(stripped, eq) orelse {
             search_start = eq + 1;
@@ -80,7 +86,8 @@ fn findAssignment(cmd: []const u8) ?Assignment {
             search_start = eq + 1;
             continue;
         };
-        return .{ .name = name, .value = value };
+        const value_end = @intFromPtr(value.ptr) - @intFromPtr(stripped.ptr) + value.len;
+        return .{ .name = name, .value = value, .end = value_end };
     }
     return null;
 }
@@ -130,6 +137,25 @@ fn stripQuotes(s: []const u8) []const u8 {
         return s[1 .. s.len - 1];
     }
     return s;
+}
+
+test "inline assign detects secret after a non-sensitive assignment" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "FOO=bar DB_PASSWORD=zK9mQx2LwPq44XyTr7Vn ./run", .command = "FOO=bar DB_PASSWORD=zK9mQx2LwPq44XyTr7Vn ./run" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("zK9mQx2LwPq44XyTr7Vn", cs[0].token);
+}
+
+test "inline assign detects multiple secrets on one line" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "API_TOKEN=aX3fKm92LqR7 DB_PASSWORD=zK9mQx2LwPq4 ./run", .command = "API_TOKEN=aX3fKm92LqR7 DB_PASSWORD=zK9mQx2LwPq4 ./run" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 2), cs.len);
+    try std.testing.expectEqualStrings("aX3fKm92LqR7", cs[0].token);
+    try std.testing.expectEqualStrings("zK9mQx2LwPq4", cs[1].token);
 }
 
 test "inline assign detects password" {

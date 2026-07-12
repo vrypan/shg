@@ -455,6 +455,7 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
         \\  inline_assign     VAR=value with sensitive keywords
         \\  auth_header       Authorization: Bearer <token>, --password <val>
         \\  credential_url    scheme://user:pass@host
+        \\  known_token       known provider token prefixes (ghp_, sk-ant-, ...)
         \\  config_check      compiled match.*.shg pattern match
         \\  private_key       -----BEGIN * KEY----- markers
         \\  age_secret_key    AGE-SECRET-KEY-1... markers

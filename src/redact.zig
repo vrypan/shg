@@ -11,8 +11,9 @@ const max_redacted_len = 32;
 const show_chars = 4;
 
 pub fn redactToken(token: []const u8, alloc: std.mem.Allocator) ![]u8 {
-    // Short tokens: fall back to 1 char each side so the bulk stays hidden.
-    const each: usize = if (token.len > show_chars * 2) show_chars else 1;
+    // Show at most len/4 per side so at least half of the token stays hidden;
+    // short tokens fall back to 1 char each side.
+    const each: usize = if (token.len > show_chars * 2) @min(show_chars, token.len / 4) else 1;
 
     if (token.len <= each * 2) {
         const out = try alloc.alloc(u8, token.len);
@@ -60,10 +61,18 @@ pub fn redactCommand(cmd: []const u8, token: []const u8, alloc: std.mem.Allocato
 
 test "redact long token shows 4 chars each side" {
     const alloc = std.testing.allocator;
-    // 15 chars, > show_chars*2=8: shows first 4 + stars + last 4
-    const r = try redactToken("sk-abc123def456", alloc);
+    // 16 chars, len/4 = 4: shows first 4 + stars + last 4
+    const r = try redactToken("sk-abc123def4567", alloc);
     defer alloc.free(r);
-    try std.testing.expectEqualStrings("sk-a*******f456", r);
+    try std.testing.expectEqualStrings("sk-a********4567", r);
+}
+
+test "redact medium token hides at least half" {
+    const alloc = std.testing.allocator;
+    // 9 chars, len/4 = 2: shows first 2 + 5 stars + last 2
+    const r = try redactToken("zK9mQx2Lw", alloc);
+    defer alloc.free(r);
+    try std.testing.expectEqualStrings("zK*****Lw", r);
 }
 
 test "redact short token falls back to 1 char each side" {
@@ -83,11 +92,11 @@ test "redact two-char token" {
 
 test "redact command token at end" {
     const alloc = std.testing.allocator;
-    const r = try redactCommand("export API_KEY=sk-abc123def456", "sk-abc123def456", alloc);
+    const r = try redactCommand("export API_KEY=sk-abc123def4567", "sk-abc123def4567", alloc);
     defer alloc.free(r.text);
-    try std.testing.expectEqualStrings("export API_KEY=sk-a*******f456", r.text);
+    try std.testing.expectEqualStrings("export API_KEY=sk-a********4567", r.text);
     try std.testing.expectEqual(@as(usize, 15), r.match_start);
-    try std.testing.expectEqual(@as(usize, 15), r.match_len);
+    try std.testing.expectEqual(@as(usize, 16), r.match_len);
 }
 
 test "redact token longer than max capped at 32" {
@@ -103,8 +112,8 @@ test "redact token longer than max capped at 32" {
 
 test "redact command truncates trailing content" {
     const alloc = std.testing.allocator;
-    // "s3cr3tpassword" is 14 chars > 8: shows first 4 + stars + last 4
+    // "s3cr3tpassword" is 14 chars, len/4 = 3: shows first 3 + stars + last 3
     const r = try redactCommand("curl -u admin:s3cr3tpassword --verbose", "s3cr3tpassword", alloc);
     defer alloc.free(r.text);
-    try std.testing.expectEqualStrings("curl -u admin:s3cr******word...", r.text);
+    try std.testing.expectEqualStrings("curl -u admin:s3c********ord...", r.text);
 }

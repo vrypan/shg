@@ -134,9 +134,13 @@ are silently dropped to reduce false positives.
 | `inline_assign` | `VAR=value` with sensitive keywords |
 | `auth_header` | `Authorization: Bearer <token>`, `--password <val>` |
 | `credential_url` | `scheme://user:pass@host` |
+| `known_token` | known provider token prefixes (`ghp_`, `sk-ant-`, `AKIA`, …) |
 | `config_check` | compiled `match.*.shg` pattern match |
 | `private_key` | `-----BEGIN * KEY-----` and `AGE-SECRET-KEY-1` markers |
 | `ssh_key` | `ssh-rsa`, `ssh-ed25519`, `ecdsa-sha2-*`, FIDO2/sk public keys |
+
+The `known_token` prefix list is shared with the rotation hints, so a match
+also tells you where to rotate the credential.
 
 Run `shg-config status` to list active detection patterns and rules.
 
@@ -162,12 +166,14 @@ The default `paths.default.shg` created by `shg-config defaults` includes:
 
 ### Redaction format
 
-The number of plaintext characters shown depends on token length:
+The number of plaintext characters shown depends on token length; at least
+half of the token is always hidden:
 
 | Token length | Visible chars | Example |
 |---|---|---|
 | ≤ 8 chars | 1 each side | `ghp_*bcde` |
-| 9–32 chars | 4 each side | `ghp_******ghij` |
+| 9–15 chars | length/4 each side | `zK*****Lw` |
+| 16–32 chars | 4 each side | `ghp_********ghij` |
 | > 32 chars | 4 each side, capped at 32 with `...` in the middle | `ghp_**********...***********2345` |
 
 If the detected secret appears before the end of the command, the rest of the

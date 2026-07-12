@@ -19,6 +19,7 @@ const detect_keys = @import("detect/private_keys.zig");
 const detect_assign = @import("detect/inline_assign.zig");
 const detect_auth = @import("detect/auth_header.zig");
 const detect_url = @import("detect/credential_url.zig");
+const detect_known = @import("detect/known_tokens.zig");
 
 const Entry = entry_mod.Entry;
 const Candidate = finding_mod.Candidate;
@@ -26,6 +27,17 @@ const Finding = finding_mod.Finding;
 const Severity = finding_mod.Severity;
 
 pub fn main(init: std.process.Init) !void {
+    // The documented exit-code contract: 0 clean, 1 findings, 2 error.
+    run(init) catch |err| {
+        var err_buf: [4096]u8 = undefined;
+        var stderr = Io.File.stderr().writerStreaming(init.io, &err_buf);
+        stderr.interface.print("shg: {t}\n", .{err}) catch {};
+        stderr.flush() catch {};
+        std.process.exit(2);
+    };
+}
+
+fn run(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
     const arena_alloc = init.arena.allocator();
@@ -76,7 +88,9 @@ pub fn main(init: std.process.Init) !void {
 
         var read_buf: [65536]u8 = undefined;
         var reader = Io.File.stdin().readerStreaming(io, &read_buf);
-        const entries = try parseFile(&reader.interface, "<stdin>", a);
+        var skipped: usize = 0;
+        const entries = try parseFile(&reader.interface, "<stdin>", a, &skipped);
+        warnSkippedLines(io, "<stdin>", skipped);
         try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
@@ -104,7 +118,9 @@ pub fn main(init: std.process.Init) !void {
 
             var read_buf: [65536]u8 = undefined;
             var reader = file.reader(io, &read_buf);
-            const entries = try parseFile(&reader.interface, path, a);
+            var skipped: usize = 0;
+            const entries = try parseFile(&reader.interface, path, a, &skipped);
+            warnSkippedLines(io, path, skipped);
             try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
         }
     }
@@ -155,14 +171,22 @@ fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.
     return try rules.Cache.init(bytes);
 }
 
-fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator) ![]Entry {
+fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Entry {
     if (std.mem.indexOf(u8, path, "fish_history") != null)
-        return fish_parser.parse(reader, path, alloc);
+        return fish_parser.parse(reader, path, alloc, skipped);
     if (std.mem.endsWith(u8, path, ".jsonl"))
         return jsonl_parser.parse(reader, path, alloc);
     // The zsh parser also accepts plain one-command-per-line histories. Using it
     // as the default preserves zsh extended metadata for explicit --path scans.
-    return zsh_parser.parse(reader, path, alloc);
+    return zsh_parser.parse(reader, path, alloc, skipped);
+}
+
+fn warnSkippedLines(io: Io, path: []const u8, skipped: usize) void {
+    if (skipped == 0) return;
+    var err_buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writerStreaming(io, &err_buf);
+    stderr.interface.print("shg: warning: {s}: skipped {d} oversized line(s)\n", .{ path, skipped }) catch {};
+    stderr.flush() catch {};
 }
 
 fn parseEnv(environ: *const std.process.Environ.Map, alloc: std.mem.Allocator) ![]Entry {
@@ -216,11 +240,14 @@ fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules
     }
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
+    // known_tokens runs last so that, when several detectors find the same
+    // token, the more specific det_type (auth_header, inline_assign, …) wins.
     const detectors = [_]DetectFn{
         detect_keys.detect,
         detect_assign.detect,
         detect_auth.detect,
         detect_url.detect,
+        detect_known.detect,
     };
 
     for (detectors) |det| {
@@ -338,12 +365,14 @@ test {
     _ = @import("detect/inline_assign.zig");
     _ = @import("detect/auth_header.zig");
     _ = @import("detect/credential_url.zig");
+    _ = @import("detect/known_tokens.zig");
 }
 
 test "explicit zsh-format fixture path preserves extended commands" {
     const alloc = std.testing.allocator;
     var reader = Io.Reader.fixed(": 1715000000:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n");
-    const entries = try parseFile(&reader, "zsh_sample.txt", alloc);
+    var skipped: usize = 0;
+    const entries = try parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);
@@ -458,15 +487,16 @@ test "compiled ignore rules suppress environment assignments" {
 
 test "compiled match rules redact full token-like match" {
     const alloc = std.testing.allocator;
-    const cache_bytes = try rules.compile(alloc, "", "ghp_", "");
+    // "zz9_" is not a known provider prefix, so the config rule does the work.
+    const cache_bytes = try rules.compile(alloc, "", "zz9_", "");
     defer alloc.free(cache_bytes);
     const cache = try rules.Cache.init(cache_bytes);
     const e = Entry{
         .file = "test",
         .line = 1,
         .timestamp = null,
-        .raw = "CUSTOM_VALUE=ghp_abcdefghijklmnopqrstuvwxyz012345",
-        .command = "CUSTOM_VALUE=ghp_abcdefghijklmnopqrstuvwxyz012345",
+        .raw = "CUSTOM_VALUE=zz9_abcdefghijklmnopqrstuvwxyz012345",
+        .command = "CUSTOM_VALUE=zz9_abcdefghijklmnopqrstuvwxyz012345",
     };
 
     const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
@@ -477,6 +507,31 @@ test "compiled match rules redact full token-like match" {
 
     try std.testing.expectEqual(@as(usize, 1), findings.len);
     try std.testing.expectEqualStrings("config_check", findings[0].det_type);
+    try std.testing.expect(std.mem.indexOf(u8, findings[0].redacted_cmd, "abcdefghijklmnopqrstuvwxyz012345") == null);
+}
+
+test "known provider token takes precedence over config_check" {
+    const alloc = std.testing.allocator;
+    const cache_bytes = try rules.compile(alloc, "", "ghp_", "");
+    defer alloc.free(cache_bytes);
+    const cache = try rules.Cache.init(cache_bytes);
+    const e = Entry{
+        .file = "test",
+        .line = 1,
+        .timestamp = null,
+        .raw = "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
+        .command = "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
+    };
+
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    defer {
+        for (findings) |f| alloc.free(f.redacted_cmd);
+        alloc.free(findings);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), findings.len);
+    try std.testing.expectEqualStrings("known_token", findings[0].det_type);
+    try std.testing.expectEqual(Severity.high, findings[0].severity);
     try std.testing.expect(std.mem.indexOf(u8, findings[0].redacted_cmd, "abcdefghijklmnopqrstuvwxyz012345") == null);
 }
 
@@ -518,7 +573,8 @@ test "corpus true positives produce one visible finding per line" {
         ": 1715000003:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" ++
         ": 1715000004:0;mysql --password s3cr3tDatabasePass99\n";
     var reader = Io.Reader.fixed(input);
-    const entries = try parseFile(&reader, "zsh_sample.txt", alloc);
+    var skipped: usize = 0;
+    const entries = try parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);
@@ -554,7 +610,8 @@ test "corpus false positives produce no visible findings" {
         "docker ps\n" ++
         "kubectl get pods\n";
     var reader = Io.Reader.fixed(input);
-    const entries = try parseFile(&reader, "bash_safe.txt", alloc);
+    var skipped: usize = 0;
+    const entries = try parseFile(&reader, "bash_safe.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);

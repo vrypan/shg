@@ -38,9 +38,11 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
 }
 
 fn extractPassword(s: []const u8) ?[]const u8 {
+    // The authority ends at the path, query, or fragment; a later '@' in the
+    // path (e.g. http://host:8080/user@example.com) is not userinfo.
     var auth_end = s.len;
     for (s, 0..) |c, i| {
-        if (c == ' ' or c == '"' or c == '\'' or c == '\\') { auth_end = i; break; }
+        if (c == ' ' or c == '"' or c == '\'' or c == '\\' or c == '/' or c == '?' or c == '#') { auth_end = i; break; }
     }
     const authority = s[0..auth_end];
     const at = std.mem.indexOfScalar(u8, authority, '@') orelse return null;
@@ -49,6 +51,18 @@ fn extractPassword(s: []const u8) ?[]const u8 {
     const pass = userinfo[colon + 1 ..];
     if (pass.len == 0) return null;
     return pass;
+}
+
+test "url with colon and at-sign in path is not a credential" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl http://localhost:8080/user@example.com",
+        .command = "curl http://localhost:8080/user@example.com",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
 }
 
 test "detect credential url" {

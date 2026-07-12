@@ -3,6 +3,28 @@ const std = @import("std");
 const hints_text = @embedFile("defaults/hints.shg");
 const default_hint = "Remove this entry from history and rotate the credential";
 
+/// Iterate the known provider token prefixes (the prefix: keys in hints.shg).
+/// Shared with the known_tokens detector so detection and rotation hints stay
+/// in sync from a single list.
+pub const PrefixIter = struct {
+    lines: std.mem.SplitIterator(u8, .scalar),
+
+    pub fn next(self: *PrefixIter) ?[]const u8 {
+        while (self.lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0 or line[0] == '#') continue;
+            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
+            const key = line[0..tab];
+            if (std.mem.startsWith(u8, key, "prefix:")) return key[7..];
+        }
+        return null;
+    }
+};
+
+pub fn prefixIter() PrefixIter {
+    return .{ .lines = std.mem.splitScalar(u8, hints_text, '\n') };
+}
+
 /// Return the best rotation hint for a finding.
 /// Token-prefix rules take priority over det_type rules; among prefix rules the
 /// longest matching prefix wins (so "sk-ant-" beats "sk-").
