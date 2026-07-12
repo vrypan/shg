@@ -134,3 +134,41 @@ curl http://internal/api?token=xyz # SHGNOK  ← don't save, no need to scan
 > **bash / fish note.** Neither shell has an equivalent pre-history hook.
 > bash's `PROMPT_COMMAND` and fish's `fish_preexec` both fire too late to
 > cleanly prevent the history write.
+
+## Scanning AI agent transcripts
+
+AI coding agents (Claude Code, Codex) store full session transcripts on disk.
+As an agent reads `.env` files, runs `env`, and prints connection strings,
+those secrets are copied verbatim into the transcript — a file that usually
+has none of the protections of the files the secrets came from. `shg agents`
+scans those transcripts for that exposure.
+
+Run it on demand:
+
+```sh
+shg agents            # scans the configured agent locations
+shg agents --level low # include lower-confidence findings
+```
+
+With no `--path`, it scans the locations in `paths.agents.*.shg`. The shipped
+`paths.agents.default.shg` covers:
+
+```
+~/.claude/projects
+~/.codex/sessions
+~/.codex/history.jsonl
+```
+
+Add your own locations in `paths.agents.local.shg` (one path per line; `~/`
+expands to home; directories are walked recursively), then run
+`shg-config compile`.
+
+By default `shg agents` scans user prompts, tool calls, and tool output — the
+content where secrets concentrate. Pass `--all-content` to also scan assistant
+messages and reasoning (noisier, occasionally useful).
+
+Agent transcripts are logs, not editable line by line: when `shg agents`
+flags a session file, rotate the affected credential and delete the file, and
+check the directory is not synced, committed, or world-readable. To silence a
+recurring non-secret without affecting `shg scan`, add a pattern to
+`ignore.agents.shg` and recompile.

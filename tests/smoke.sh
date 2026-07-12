@@ -185,4 +185,24 @@ if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; the
 fi
 say "PASS compiled config rules"
 
+say "TEST scan agent transcripts (shg agents)"
+adir=$tmp/agents/.claude/projects/p
+mkdir -p "$adir"
+agent_tok=ghp_abcdefghijklmnopqrstuvwxyz012345
+printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"env dump $agent_tok\"}]}}" > "$adir/s.jsonl"
+printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"again $agent_tok\"}]}}" >> "$adir/s.jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" agents --path "$adir"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$adir/s.jsonl"
+printf '%s\n' "$output" | grep -q 'known_token'
+printf '%s\n' "$output" | grep -q '(2'
+printf '%s\n' "$output" | grep -q 'delete the affected session files'
+# distinct token reported once, not once per occurrence
+test "$(printf '%s\n' "$output" | grep -c 'known_token')" -eq 1
+if printf '%s\n' "$output" | grep -q "$agent_tok"; then
+    printf '%s\n' "agents output leaked full secret" >&2
+    exit 1
+fi
+say "PASS scan agent transcripts (shg agents)"
+
 say "SMOKE PASS"

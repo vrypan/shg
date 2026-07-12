@@ -68,6 +68,7 @@ shg <command> [options]
 
 Commands:
   scan      Scan history files for secrets (default)
+  agents    Scan AI agent transcripts for secrets
   version   Print version
 ```
 
@@ -130,6 +131,54 @@ shg scan --level high && echo "clean"
 > sensitive info from being written to history in the first place.
 
 For shell startup scans and pre-history hooks see [INTEGRATIONS.md](INTEGRATIONS.md).
+
+### agents
+
+```
+shg agents [options]
+
+Options:
+  -p, --path <PATH>     Transcript file or directory to scan [repeatable]
+      --all-content     Also scan assistant messages and reasoning
+      --level <LEVEL>   low|medium|high [default: high]
+      --json            Output findings as NDJSON
+```
+
+AI coding agents (Claude Code, Codex) keep full session transcripts on disk.
+Those transcripts are a **secret-concentration point**: as the agent reads
+`.env` files, runs `env`, and prints connection strings, every tool result is
+stored verbatim. A single transcript can end up holding secrets from many
+files that were individually locked down — in a file that is usually not
+gitignored, not permission-hardened, often cloud-synced, and casually shared
+in bug reports.
+
+`shg agents` scans those transcripts for that exposure. It reads the content
+that concentrates secrets — user prompts, tool calls, and tool output — and
+skips assistant prose and reasoning unless you pass `--all-content`. Findings
+are grouped **per session file**, and within each file every distinct secret
+is listed **once** with an occurrence count and a redacted context snippet:
+
+```
+$ shg agents
+
+~/.claude/projects/myapp/3f2c….jsonl
+  [!!!] known_token   ghp_****…****2345   (3×, tool_output)
+        …export GITHUB_TOKEN=ghp_****…****2345…
+
+1 secret(s) across 1 session file(s).
+Rotate each credential, delete the affected session files, and make sure
+this directory is not synced, committed, or world-readable.
+```
+
+With no `--path`, `shg agents` scans the locations listed in
+`paths.agents.*.shg` (by default `~/.claude/projects`, `~/.codex/sessions`,
+and `~/.codex/history.jsonl`). It never crawls the disk. See
+[Configuration](#configuration) for the agent-scoped `ignore.agents.shg`,
+`match.agents.shg`, and `paths.agents.shg` files.
+
+Remediation differs from history: you can't cleanly edit one line of a
+transcript, so the advice is to rotate the credential and delete the session
+file.
 
 ## Detection
 
@@ -241,6 +290,18 @@ The config directory contains editable `.shg` files:
 - `ignore.*.shg` — patterns that suppress findings
 - `match.*.shg` — additional patterns to flag
 - `paths.*.shg` — history paths to scan when `--path` is not used
+
+Files in the reserved `agents` group are scoped to `shg agents` only:
+
+- `ignore.agents.shg` — suppress findings in agent transcripts (does not affect
+  `shg scan`)
+- `match.agents.shg` — extra patterns to flag in agent transcripts only
+- `paths.agents.shg` — transcript locations `shg agents` scans when `--path` is
+  not used (one path per line, same format as `paths.*.shg`; directories are
+  walked recursively)
+
+General `ignore.*` and `match.*` rules apply to both `scan` and `agents`;
+general `paths.*` rules drive `scan` only and are never scanned by `agents`.
 
 Default config templates are maintained as plain text files in `src/defaults/`
 and embedded into `shg-config` at build time.
