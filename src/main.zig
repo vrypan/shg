@@ -216,7 +216,7 @@ fn scanEntries(
     has_findings: *bool,
 ) !void {
     for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, entropy_threshold, rules_cache);
+        const findings = try detect.detectEntry(e, alloc, entropy_threshold, rules_cache, false);
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(level)) continue;
@@ -265,7 +265,7 @@ test "explicit zsh-format fixture path preserves extended commands" {
     try std.testing.expectEqual(@as(usize, 1), entries.len);
     try std.testing.expectEqualStrings("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", entries[0].command);
 
-    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -283,7 +283,7 @@ test "duplicate token candidates collapse to one finding" {
         .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
-    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -308,7 +308,7 @@ test "environment entries are converted to assignments" {
     try std.testing.expectEqualStrings("<env>", entries[0].file);
     try std.testing.expectEqualStrings("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345", entries[0].command);
 
-    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null);
+    const findings = try detect.detectEntry(entries[0], alloc, scorer.default_entropy_threshold, null, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -354,7 +354,7 @@ test "compiled ignore rules suppress environment assignments" {
 
     var visible: usize = 0;
     for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
@@ -381,7 +381,7 @@ test "compiled match rules redact full token-like match" {
         .command = "CUSTOM_VALUE=zz9_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -405,7 +405,7 @@ test "known provider token takes precedence over config_check" {
         .command = "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -430,7 +430,7 @@ test "compiled match rules still report when inline assignment also matches" {
         .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347",
     };
 
-    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -468,7 +468,7 @@ test "corpus true positives produce one visible finding per line" {
 
     var visible: usize = 0;
     for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null, false);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);
@@ -503,7 +503,7 @@ test "corpus false positives produce no visible findings" {
     }
 
     for (entries) |e| {
-        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+        const findings = try detect.detectEntry(e, alloc, scorer.default_entropy_threshold, null, false);
         defer {
             for (findings) |f| alloc.free(f.redacted_cmd);
             alloc.free(findings);

@@ -18,7 +18,11 @@ const Candidate = finding_mod.Candidate;
 const Finding = finding_mod.Finding;
 const Severity = finding_mod.Severity;
 
-pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache) ![]Finding {
+/// Detect secrets in one entry. When `agent` is true, the agent-scoped rule
+/// kinds (agent_ignore / agent_check) are honoured in addition to the general
+/// ones, so `shg agents` can suppress or match transcript-specific patterns
+/// without affecting `scan`.
+pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, agent: bool) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
     defer seen_tokens.deinit(alloc);
@@ -30,6 +34,7 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
 
     if (rules_cache) |cache| {
         if (try cache.matchesAny(.ignore, e.command)) return findings.toOwnedSlice(alloc);
+        if (agent and try cache.matchesAny(.agent_ignore, e.command)) return findings.toOwnedSlice(alloc);
     }
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
@@ -78,7 +83,8 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
         var i: usize = 0;
         while (i < cache.ruleCount()) : (i += 1) {
             const rule = try cache.rule(i);
-            if (rule.kind != .check or !rules.matches(rule, e.command)) continue;
+            const is_check = rule.kind == .check or (agent and rule.kind == .agent_check);
+            if (!is_check or !rules.matches(rule, e.command)) continue;
             const token = configCheckToken(rule, e.command) orelse rule.pattern;
             if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;
             const full_match = commandMatchSpan(e.command, token);
@@ -156,7 +162,7 @@ test "duplicate token candidates collapse to one finding" {
         .raw = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
         .command = "curl -H \"Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz012345\"",
     };
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null);
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, null, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -179,7 +185,7 @@ test "compiled match rules redact full token-like match" {
         .command = "CUSTOM_VALUE=zz9_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -203,7 +209,7 @@ test "known provider token takes precedence over config_check" {
         .command = "echo ghp_abcdefghijklmnopqrstuvwxyz012345",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
@@ -228,7 +234,7 @@ test "compiled match rules still report when inline assignment also matches" {
         .command = "echo password=sdkjfhskjfhaskfhsakhfkshfkasjkb347",
     };
 
-    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache);
+    const findings = try detectEntry(e, alloc, scorer.default_entropy_threshold, cache, false);
     defer {
         for (findings) |f| alloc.free(f.redacted_cmd);
         alloc.free(findings);
