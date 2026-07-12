@@ -361,6 +361,7 @@ test {
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");
+    _ = @import("parsers/jsonl.zig");
     _ = @import("detect/private_keys.zig");
     _ = @import("detect/inline_assign.zig");
     _ = @import("detect/auth_header.zig");
