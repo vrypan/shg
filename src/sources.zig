@@ -91,7 +91,10 @@ fn expandPath(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map,
 }
 
 fn appendExistingPath(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), path: []const u8) !void {
-    if (!fileExists(io, path)) {
+    // A directory can be opened but not read as a stream; scanning one aborts
+    // the whole run. Skip directories here (e.g. a HISTFILE pointing at a dir);
+    // configured directory paths are walked separately by appendDirectoryFiles.
+    if (!fileExists(io, path) or isDirectory(io, path)) {
         alloc.free(path);
         return;
     }

@@ -121,7 +121,17 @@ fn run(init: std.process.Init) !void {
             var read_buf: [65536]u8 = undefined;
             var reader = file.reader(io, &read_buf);
             var skipped: usize = 0;
-            const entries = try parseFile(&reader.interface, path, a, &skipped);
+            // A path that opens but cannot be read (e.g. a directory, or a
+            // transient error) is skipped rather than aborting the whole scan.
+            const entries = parseFile(&reader.interface, path, a, &skipped) catch |err| {
+                if (err != error.FileNotFound and err != error.AccessDenied) {
+                    var perr_buf: [4096]u8 = undefined;
+                    var perr = Io.File.stderr().writerStreaming(io, &perr_buf);
+                    perr.interface.print("shg: cannot read {s}: {t}\n", .{ path, err }) catch {};
+                    perr.flush() catch {};
+                }
+                continue;
+            };
             warnSkippedLines(io, path, skipped);
             try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
         }
