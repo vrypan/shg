@@ -9,6 +9,7 @@ const scorer = @import("scorer.zig");
 const report = @import("report.zig");
 const rules = @import("rules.zig");
 const detect = @import("detect.zig");
+const agents = @import("agents.zig");
 
 const zsh_parser = @import("parsers/zsh.zig");
 const fish_parser = @import("parsers/fish.zig");
@@ -51,6 +52,11 @@ fn run(init: std.process.Init) !void {
     };
 
     if (args.subcommand == .help or args.subcommand == .version) return;
+
+    if (args.subcommand == .agents) {
+        try agents.run(init, args);
+        return;
+    }
 
     const report_opts = report.Options{
         .level = args.level,
@@ -232,6 +238,7 @@ test {
     _ = @import("sources.zig");
     _ = @import("detect.zig");
     _ = @import("agent_formats.zig");
+    _ = @import("agents.zig");
     _ = @import("parsers/bash.zig");
     _ = @import("parsers/zsh.zig");
     _ = @import("parsers/fish.zig");

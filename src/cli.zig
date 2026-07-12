@@ -5,7 +5,7 @@ const build_options = @import("build_options");
 
 pub const version = build_options.version;
 
-pub const Subcommand = enum { scan, help, version };
+pub const Subcommand = enum { scan, agents, help, version };
 
 pub const Args = struct {
     subcommand: Subcommand,
@@ -18,13 +18,35 @@ pub const Args = struct {
     json: bool,
     summary: bool,
     one_line: bool,
+    all_content: bool,
     env_explicit: bool,
     hist_explicit: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
     .{ .name = "scan",    .description = "Scan history files for secrets (default)" },
+    .{ .name = "agents",  .description = "Scan AI agent transcripts for secrets"    },
     .{ .name = "version", .description = "Print version"                            },
+};
+
+const agents_flags = [_]zecli.FlagSpec{
+    .{ .name = "path",        .short = 'p', .value = .string, .value_name = "PATH",  .description = "Transcript file or directory to scan", .repeatable = true },
+    .{ .name = "all-content",              .value = .bool_optional,                  .description = "Also scan assistant messages and reasoning", .default_value = "false" },
+    .{ .name = "level",                    .value = .string, .value_name = "LEVEL", .description = "low|medium|high", .default_value = "high" },
+    .{ .name = "json",                     .value = .bool_optional,                  .description = "Output findings as NDJSON", .default_value = "false" },
+};
+
+const agents_spec = zecli.CommandSpec{
+    .name        = "agents",
+    .description = "Scan AI agent session transcripts for secrets, reported per session file.",
+    .usage       = "shg agents [options]",
+    .flags       = &agents_flags,
+    .extra_help  =
+        \\
+        \\With no --path, scans the locations in paths.agents.*.shg
+        \\(~/.claude/projects, ~/.codex/sessions, ~/.codex/history.jsonl by default).
+        \\
+    ,
 };
 
 const scan_flags = [_]zecli.FlagSpec{
@@ -73,6 +95,9 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
         const first = raw[1];
         if (std.mem.eql(u8, first, "scan")) {
             subcmd = .scan;
+            subcmd_args = if (raw.len > 2) raw[2..] else &.{};
+        } else if (std.mem.eql(u8, first, "agents")) {
+            subcmd = .agents;
             subcmd_args = if (raw.len > 2) raw[2..] else &.{};
         } else if (std.mem.eql(u8, first, "version")) {
             subcmd = .version;
@@ -134,9 +159,37 @@ pub fn parse(raw: []const [:0]const u8, writer: anytype, alloc: std.mem.Allocato
                 .json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable,
                 .summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable,
                 .one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable,
+                .all_content = false,
                 .env_explicit = parsed.last("env") != null,
                 .hist_explicit = parsed.last("hist") != null,
             };
+        },
+        .agents => {
+            if (zecli.helpRequested(subcmd_args)) {
+                try zecli.printCommandHelp(alloc, writer, agents_spec);
+                return defaultArgs(.help);
+            }
+            const parsed = try zecli.parseCommand(alloc, writer, subcmd_args, agents_spec);
+
+            var paths: std.ArrayList([]const u8) = .empty;
+            for (parsed.flags.items) |flag| {
+                if (std.mem.eql(u8, flag.name, "path")) {
+                    if (flag.value) |v| try paths.append(alloc, v);
+                }
+            }
+
+            const level_str = parsed.last("level") orelse "high";
+            const level = parseSeverity(level_str) orelse {
+                try writer.print("error: invalid --level value '{s}' (use low, medium, or high)\n", .{level_str});
+                return error.ReportedCliError;
+            };
+
+            var args = defaultArgs(.agents);
+            args.paths = try paths.toOwnedSlice(alloc);
+            args.level = level;
+            args.json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable;
+            args.all_content = zecli.parseBool(parsed.last("all-content") orelse "false") catch unreachable;
+            return args;
         },
     }
 }
@@ -160,6 +213,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .json = false,
         .summary = false,
         .one_line = false,
+        .all_content = false,
         .env_explicit = false,
         .hist_explicit = false,
     };
