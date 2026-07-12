@@ -106,7 +106,10 @@ fn assignmentValue(s: []const u8, start: usize) ?[]const u8 {
         const quote = s[start];
         var end = start + 1;
         while (end < s.len and s[end] != quote) end += 1;
-        return s[start..end];
+        // Return the content between the quotes, not including the opening
+        // quote — otherwise the leading quote defeats placeholder/reference
+        // checks (e.g. "$VAR" would not be recognised as starting with '$').
+        return s[start + 1 .. end];
     }
 
     var end = start;
@@ -184,6 +187,26 @@ test "inline assign ignores plain URL query params without secrets" {
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
     try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "inline assign strips quotes so quoted shell-variable is a placeholder" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "HOMEBREW_TAP_GITHUB_TOKEN=\"$HOMEBREW_TAP_GITHUB_TOKEN\"", .command = "HOMEBREW_TAP_GITHUB_TOKEN=\"$HOMEBREW_TAP_GITHUB_TOKEN\"" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("$HOMEBREW_TAP_GITHUB_TOKEN", cs[0].token);
+    try std.testing.expect(cs[0].signals.is_placeholder);
+}
+
+test "inline assign strips quotes around a real secret value" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export API_KEY=\"sk-abcdefghijklmnopqrstuvwxyz012345\"", .command = "export API_KEY=\"sk-abcdefghijklmnopqrstuvwxyz012345\"" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("sk-abcdefghijklmnopqrstuvwxyz012345", cs[0].token);
+    try std.testing.expect(!cs[0].signals.is_placeholder);
 }
 
 test "inline assign flags shell-variable value as placeholder" {
