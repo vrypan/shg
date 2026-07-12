@@ -18,11 +18,11 @@ const Candidate = finding_mod.Candidate;
 const Finding = finding_mod.Finding;
 const Severity = finding_mod.Severity;
 
-/// Detect secrets in one entry. When `agent` is true, the agent-scoped rule
-/// kinds (agent_ignore / agent_check) are honoured in addition to the general
-/// ones, so `shg agents` can suppress or match transcript-specific patterns
+/// Detect secrets in one entry. When `deep` is true, the deep-scoped rule
+/// kinds (deep_ignore / deep_check) are honoured in addition to the general
+/// ones, so `shg deep` can suppress or match transcript-specific patterns
 /// without affecting `scan`.
-pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, agent: bool) ![]Finding {
+pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, rules_cache: ?rules.Cache, deep: bool) ![]Finding {
     var findings: std.ArrayList(Finding) = .empty;
     var seen_tokens: std.ArrayList([]const u8) = .empty;
     defer seen_tokens.deinit(alloc);
@@ -34,7 +34,7 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
 
     if (rules_cache) |cache| {
         if (try cache.matchesAny(.ignore, e.command)) return findings.toOwnedSlice(alloc);
-        if (agent and try cache.matchesAny(.agent_ignore, e.command)) return findings.toOwnedSlice(alloc);
+        if (deep and try cache.matchesAny(.deep_ignore, e.command)) return findings.toOwnedSlice(alloc);
     }
 
     const DetectFn = *const fn (Entry, std.mem.Allocator) anyerror![]Candidate;
@@ -83,7 +83,7 @@ pub fn detectEntry(e: Entry, alloc: std.mem.Allocator, entropy_threshold: f64, r
         var i: usize = 0;
         while (i < cache.ruleCount()) : (i += 1) {
             const rule = try cache.rule(i);
-            const is_check = rule.kind == .check or (agent and rule.kind == .agent_check);
+            const is_check = rule.kind == .check or (deep and rule.kind == .deep_check);
             if (!is_check or !rules.matches(rule, e.command)) continue;
             const token = configCheckToken(rule, e.command) orelse rule.pattern;
             if (hasHighSeverityToken(findings.items, seen_tokens.items, token)) continue;

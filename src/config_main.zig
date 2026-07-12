@@ -152,12 +152,12 @@ pub fn main(init: std.process.Init) !void {
     const ignore_default_path = (try config.ignoreDefaultFile(alloc, init.environ_map)).?;
     const match_default_path = (try config.matchDefaultFile(alloc, init.environ_map)).?;
     const paths_default_path = (try config.pathsDefaultFile(alloc, init.environ_map)).?;
-    const agent_paths_default_path = (try config.agentPathsDefaultFile(alloc, init.environ_map)).?;
+    const deep_paths_default_path = (try config.deepPathsDefaultFile(alloc, init.environ_map)).?;
     const default_files = [_]DefaultFile{
         .{ .path = ignore_default_path, .bytes = default_ignore_rules },
         .{ .path = match_default_path, .bytes = default_match_rules },
         .{ .path = paths_default_path, .bytes = default_paths_rules },
-        .{ .path = agent_paths_default_path, .bytes = default_agent_paths_rules },
+        .{ .path = deep_paths_default_path, .bytes = default_deep_paths_rules },
     };
 
     if (std.mem.eql(u8, command, "defaults")) {
@@ -166,7 +166,7 @@ pub fn main(init: std.process.Init) !void {
                 try stdout.interface.print(
                     "Default config files are provided by Homebrew at:\n  {s}\n\n" ++
                     "To customise, add ignore.local.shg, match.local.shg, paths.local.shg,\n" ++
-                    "or paths.agents.local.shg to:\n  {s}\n",
+                    "or paths.deep.local.shg to:\n  {s}\n",
                     .{ sys_dir, dir },
                 );
                 return;
@@ -181,41 +181,41 @@ pub fn main(init: std.process.Init) !void {
     var ignore_group: ConfigGroup = .{ .text = "", .count = 0 };
     var match_group: ConfigGroup  = .{ .text = "", .count = 0 };
     var paths_group: ConfigGroup  = .{ .text = "", .count = 0 };
-    var agent_ignore_group: ConfigGroup = .{ .text = "", .count = 0 };
-    var agent_match_group: ConfigGroup  = .{ .text = "", .count = 0 };
-    var agent_paths_group: ConfigGroup  = .{ .text = "", .count = 0 };
+    var deep_ignore_group: ConfigGroup = .{ .text = "", .count = 0 };
+    var deep_match_group: ConfigGroup  = .{ .text = "", .count = 0 };
+    var deep_paths_group: ConfigGroup  = .{ .text = "", .count = 0 };
 
     if (try config.systemConfigDir(alloc, init.environ_map)) |sys_dir| {
         if (dirExists(io, sys_dir)) {
             ignore_group = try readConfigGroup(io, alloc, sys_dir, "ignore.", ".shg", .general);
             match_group  = try readConfigGroup(io, alloc, sys_dir, "match.",  ".shg", .general);
             paths_group  = try readConfigGroup(io, alloc, sys_dir, "paths.",  ".shg", .general);
-            agent_ignore_group = try readConfigGroup(io, alloc, sys_dir, "ignore.", ".shg", .agents);
-            agent_match_group  = try readConfigGroup(io, alloc, sys_dir, "match.",  ".shg", .agents);
-            agent_paths_group  = try readConfigGroup(io, alloc, sys_dir, "paths.",  ".shg", .agents);
+            deep_ignore_group = try readConfigGroup(io, alloc, sys_dir, "ignore.", ".shg", .deep);
+            deep_match_group  = try readConfigGroup(io, alloc, sys_dir, "match.",  ".shg", .deep);
+            deep_paths_group  = try readConfigGroup(io, alloc, sys_dir, "paths.",  ".shg", .deep);
         }
     }
 
     ignore_group = try mergeGroups(alloc, ignore_group, try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .general));
     match_group  = try mergeGroups(alloc, match_group,  try readConfigGroup(io, alloc, dir, "match.",  ".shg", .general));
     paths_group  = try mergeGroups(alloc, paths_group,  try readConfigGroup(io, alloc, dir, "paths.",  ".shg", .general));
-    agent_ignore_group = try mergeGroups(alloc, agent_ignore_group, try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .agents));
-    agent_match_group  = try mergeGroups(alloc, agent_match_group,  try readConfigGroup(io, alloc, dir, "match.",  ".shg", .agents));
-    agent_paths_group  = try mergeGroups(alloc, agent_paths_group,  try readConfigGroup(io, alloc, dir, "paths.",  ".shg", .agents));
+    deep_ignore_group = try mergeGroups(alloc, deep_ignore_group, try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .deep));
+    deep_match_group  = try mergeGroups(alloc, deep_match_group,  try readConfigGroup(io, alloc, dir, "match.",  ".shg", .deep));
+    deep_paths_group  = try mergeGroups(alloc, deep_paths_group,  try readConfigGroup(io, alloc, dir, "paths.",  ".shg", .deep));
 
     if (ignore_group.count == 0 or match_group.count == 0 or paths_group.count == 0) {
-        try stdout.interface.print("Config files are missing in {s}. \nCreate default ignore.default.shg, match.default.shg, paths.default.shg, and paths.agents.default.shg? \n[y/N] ", .{dir});
+        try stdout.interface.print("Config files are missing in {s}. \nCreate default ignore.default.shg, match.default.shg, paths.default.shg, and paths.deep.default.shg? \n[y/N] ", .{dir});
         try stdout.flush();
         if (try promptYes(io)) {
             if (ignore_group.count == 0 and !fileExists(io, ignore_default_path)) try writeFile(io, ignore_default_path, default_ignore_rules);
             if (match_group.count == 0 and !fileExists(io, match_default_path)) try writeFile(io, match_default_path, default_match_rules);
             if (paths_group.count == 0 and !fileExists(io, paths_default_path)) try writeFile(io, paths_default_path, default_paths_rules);
-            if (agent_paths_group.count == 0 and !fileExists(io, agent_paths_default_path)) try writeFile(io, agent_paths_default_path, default_agent_paths_rules);
+            if (deep_paths_group.count == 0 and !fileExists(io, deep_paths_default_path)) try writeFile(io, deep_paths_default_path, default_deep_paths_rules);
             try stdout.interface.writeAll("created default config files\n");
             ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .general);
             match_group = try readConfigGroup(io, alloc, dir, "match.", ".shg", .general);
             paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg", .general);
-            agent_paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg", .agents);
+            deep_paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg", .deep);
         } else {
             try stderr.interface.writeAll("error: config files are missing; create them or rerun and answer yes\n");
             try stderr.flush();
@@ -228,9 +228,9 @@ pub fn main(init: std.process.Init) !void {
         ignore_group.text,
         match_group.text,
         paths_group.text,
-        agent_ignore_group.text,
-        agent_match_group.text,
-        agent_paths_group.text,
+        deep_ignore_group.text,
+        deep_match_group.text,
+        deep_paths_group.text,
     );
     try writeFile(io, compiled_path, compiled);
 
@@ -240,7 +240,7 @@ pub fn main(init: std.process.Init) !void {
 const default_ignore_rules = @embedFile("defaults/ignore.default.shg");
 const default_match_rules = @embedFile("defaults/match.default.shg");
 const default_paths_rules = @embedFile("defaults/paths.default.shg");
-const default_agent_paths_rules = @embedFile("defaults/paths.agents.default.shg");
+const default_deep_paths_rules = @embedFile("defaults/paths.deep.default.shg");
 
 const DefaultFile = struct {
     path: []const u8,
@@ -296,15 +296,15 @@ const ConfigGroup = struct {
     count: usize,
 };
 
-// A config file `<prefix><group>.shg` is agent-scoped when its group is
-// `agents` or begins with `agents.` (e.g. paths.agents.shg,
-// paths.agents.local.shg). Everything else (default, local, my, …) is general.
-const Scope = enum { general, agents };
+// A config file `<prefix><group>.shg` is deep-scoped when its group is
+// `deep` or begins with `deep.` (e.g. paths.deep.shg,
+// paths.deep.local.shg). Everything else (default, local, my, …) is general.
+const Scope = enum { general, deep };
 
-fn isAgentGroup(name: []const u8, prefix: []const u8, suffix: []const u8) bool {
+fn isDeepGroup(name: []const u8, prefix: []const u8, suffix: []const u8) bool {
     if (name.len < prefix.len + suffix.len) return false;
     const group = name[prefix.len .. name.len - suffix.len];
-    return std.mem.eql(u8, group, "agents") or std.mem.startsWith(u8, group, "agents.");
+    return std.mem.eql(u8, group, "deep") or std.mem.startsWith(u8, group, "deep.");
 }
 
 fn dirExists(io: Io, path: []const u8) bool {
@@ -335,8 +335,8 @@ fn readConfigGroup(io: Io, alloc: std.mem.Allocator, dir_path: []const u8, prefi
         if (entry.kind != .file and entry.kind != .unknown) continue;
         if (!std.mem.startsWith(u8, entry.name, prefix)) continue;
         if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
-        const want_agents = scope == .agents;
-        if (isAgentGroup(entry.name, prefix, suffix) != want_agents) continue;
+        const want_deep = scope == .deep;
+        if (isDeepGroup(entry.name, prefix, suffix) != want_deep) continue;
         try names.append(alloc, try alloc.dupe(u8, entry.name));
     }
 
@@ -519,9 +519,9 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
         .{ .kind = .check,  .label = "Match rules:"   },
         .{ .kind = .ignore, .label = "Ignore rules:"  },
         .{ .kind = .path,   .label = "History paths:" },
-        .{ .kind = .agent_check,  .label = "Agent match rules (shg agents):"  },
-        .{ .kind = .agent_ignore, .label = "Agent ignore rules (shg agents):" },
-        .{ .kind = .agent_path,   .label = "Agent transcript paths (shg agents):" },
+        .{ .kind = .deep_check,  .label = "Deep match rules (shg deep):"  },
+        .{ .kind = .deep_ignore, .label = "Deep ignore rules (shg deep):" },
+        .{ .kind = .deep_path,   .label = "Deep transcript paths (shg deep):" },
     };
 
     for (sections) |section| {
@@ -534,7 +534,7 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
                 try stdout.interface.print("\n{s}\n\n", .{section.label});
                 found = true;
             }
-            if (section.kind == .path or section.kind == .agent_path) {
+            if (section.kind == .path or section.kind == .deep_path) {
                 try stdout.interface.print("  {s}\n", .{rule.pattern});
             } else {
                 const kind_str = switch (rule.match_kind) {

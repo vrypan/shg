@@ -49,11 +49,11 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     };
 
     // Discovery is bounded: explicit --path arguments, or the compiled
-    // agent_path rules (paths.agents.*.shg). Never a disk crawl.
+    // deep_path rules (paths.deep.*.shg). Never a disk crawl.
     const files = if (args.paths.len > 0)
         try sources.expandExplicitPaths(io, alloc, environ, args.paths)
     else
-        try sources.agentPaths(io, alloc, environ, cache);
+        try sources.deepPaths(io, alloc, environ, cache);
 
     var results: std.ArrayList(FileResult) = .empty;
     var file_count: usize = 0;

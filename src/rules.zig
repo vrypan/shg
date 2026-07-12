@@ -9,12 +9,12 @@ pub const RuleKind = enum(u8) {
     ignore = 1,
     check = 2,
     path = 3,
-    // Agent-scoped variants, compiled from `*.agents.shg` and read only by
-    // `shg agents`. Adding these is backward-compatible: older caches never
+    // Deep-scoped variants, compiled from `*.deep.shg` and read only by
+    // `shg deep`. Adding these is backward-compatible: older caches never
     // contain them, and `enumValue` simply gains valid byte values.
-    agent_ignore = 4,
-    agent_check = 5,
-    agent_path = 6,
+    deep_ignore = 4,
+    deep_check = 5,
+    deep_path = 6,
 };
 
 pub const MatchKind = enum(u8) {
@@ -93,25 +93,25 @@ pub fn compile(alloc: std.mem.Allocator, ignore_text: []const u8, check_text: []
     return compileFull(alloc, ignore_text, check_text, paths_text, "", "", "");
 }
 
-/// Compile general and agent-scoped rules into one cache. Agent-scoped buffers
-/// (from `*.agents.shg`) become `agent_*` rule kinds that `scan` ignores.
+/// Compile general and deep-scoped rules into one cache. Deep-scoped buffers
+/// (from `*.deep.shg`) become `deep_*` rule kinds that `scan` ignores.
 pub fn compileFull(
     alloc: std.mem.Allocator,
     ignore_text: []const u8,
     check_text: []const u8,
     paths_text: []const u8,
-    agent_ignore_text: []const u8,
-    agent_check_text: []const u8,
-    agent_paths_text: []const u8,
+    deep_ignore_text: []const u8,
+    deep_check_text: []const u8,
+    deep_paths_text: []const u8,
 ) ![]u8 {
     var parsed: std.ArrayList(Rule) = .empty;
     defer parsed.deinit(alloc);
     try appendRules(alloc, &parsed, .ignore, ignore_text);
     try appendRules(alloc, &parsed, .check, check_text);
     try appendPaths(alloc, &parsed, .path, paths_text);
-    try appendRules(alloc, &parsed, .agent_ignore, agent_ignore_text);
-    try appendRules(alloc, &parsed, .agent_check, agent_check_text);
-    try appendPaths(alloc, &parsed, .agent_path, agent_paths_text);
+    try appendRules(alloc, &parsed, .deep_ignore, deep_ignore_text);
+    try appendRules(alloc, &parsed, .deep_check, deep_check_text);
+    try appendPaths(alloc, &parsed, .deep_path, deep_paths_text);
 
     var blob: std.ArrayList(u8) = .empty;
     defer blob.deinit(alloc);
@@ -232,7 +232,7 @@ test "compile and read rules cache" {
     try std.testing.expect(!try cache.matchesAny(.ignore, "other"));
 }
 
-test "compileFull emits agent-scoped kinds distinct from general kinds" {
+test "compileFull emits deep-scoped kinds distinct from general kinds" {
     const alloc = std.testing.allocator;
     const bytes = try compileFull(
         alloc,
@@ -249,20 +249,20 @@ test "compileFull emits agent-scoped kinds distinct from general kinds" {
     // General kinds see only general rules; agent kinds see only agent rules.
     try std.testing.expect(try cache.matchesAny(.ignore, "has general-ignore here"));
     try std.testing.expect(!try cache.matchesAny(.ignore, "has agent-only-ignore here"));
-    try std.testing.expect(try cache.matchesAny(.agent_ignore, "has agent-only-ignore here"));
-    try std.testing.expect(!try cache.matchesAny(.agent_ignore, "has general-ignore here"));
+    try std.testing.expect(try cache.matchesAny(.deep_ignore, "has agent-only-ignore here"));
+    try std.testing.expect(!try cache.matchesAny(.deep_ignore, "has general-ignore here"));
     try std.testing.expect(try cache.matchesAny(.check, "has general-check here"));
-    try std.testing.expect(try cache.matchesAny(.agent_check, "has agent-only-check here"));
+    try std.testing.expect(try cache.matchesAny(.deep_check, "has agent-only-check here"));
 
-    // Path rules stay separate: general `path` vs `agent_path`.
+    // Path rules stay separate: general `path` vs `deep_path`.
     var general_path: ?[]const u8 = null;
-    var agent_path: ?[]const u8 = null;
+    var deep_path: ?[]const u8 = null;
     var i: usize = 0;
     while (i < cache.ruleCount()) : (i += 1) {
         const r = try cache.rule(i);
         if (r.kind == .path) general_path = r.pattern;
-        if (r.kind == .agent_path) agent_path = r.pattern;
+        if (r.kind == .deep_path) deep_path = r.pattern;
     }
     try std.testing.expectEqualStrings("~/.zsh_history", general_path.?);
-    try std.testing.expectEqualStrings("~/.claude/projects", agent_path.?);
+    try std.testing.expectEqualStrings("~/.claude/projects", deep_path.?);
 }

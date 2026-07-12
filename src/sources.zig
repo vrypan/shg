@@ -26,16 +26,16 @@ pub fn discover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.En
     return results.toOwnedSlice(alloc);
 }
 
-/// Expand the compiled `agent_path` rules into concrete files for `shg agents`.
-/// Mirrors `discover` but reads only agent_path rules (never general `path`
-/// rules or HISTFILE), so agent discovery stays bounded to paths.agents.*.shg.
-pub fn agentPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache) ![][]const u8 {
+/// Expand the compiled `deep_path` rules into concrete files for `shg agents`.
+/// Mirrors `discover` but reads only deep_path rules (never general `path`
+/// rules or HISTFILE), so deep discovery stays bounded to paths.deep.*.shg.
+pub fn deepPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache) ![][]const u8 {
     var results: std.ArrayList([]const u8) = .empty;
 
     var i: usize = 0;
     while (i < cache.ruleCount()) : (i += 1) {
         const rule = try cache.rule(i);
-        if (rule.kind != .agent_path) continue;
+        if (rule.kind != .deep_path) continue;
 
         const path = try expandPath(alloc, environ, rule.pattern);
         if (path) |resolved| {
