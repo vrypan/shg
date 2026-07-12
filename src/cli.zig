@@ -20,8 +20,7 @@ pub const Args = struct {
     one_line: bool,
     all_content: bool,
     thorough: bool,
-    env_explicit: bool,
-    hist_explicit: bool,
+    read_stdin: bool,
 };
 
 const commands = [_]zecli.CommandEntry{
@@ -56,6 +55,7 @@ const deep_spec = zecli.CommandSpec{
 
 const scan_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "PATH",  .description = "History file or directory to scan",  .repeatable = true },
+    .{ .name = "stdin",                            .value = .bool_optional,                  .description = "Also scan history piped on stdin", .default_value = "false" },
     .{ .name = "env",                              .value = .bool_optional,                  .description = "Scan environment variables", .default_value = "true" },
     .{ .name = "hist",                             .value = .bool_optional,                  .description = "Scan history files",          .default_value = "true" },
     .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
@@ -81,6 +81,7 @@ const scan_spec = zecli.CommandSpec{
 // history: the scan flags without the env/hist source toggles.
 const history_flags = [_]zecli.FlagSpec{
     .{ .name = "path",               .short = 'p', .value = .string, .value_name = "PATH",  .description = "History file or directory to scan",  .repeatable = true },
+    .{ .name = "stdin",                            .value = .bool_optional,                  .description = "Also scan history piped on stdin", .default_value = "false" },
     .{ .name = "level",                            .value = .string, .value_name = "LEVEL", .description = "low|medium|high",       .default_value = "high" },
     .{ .name = "entropy-threshold",                .value = .string, .value_name = "N",     .description = "Shannon entropy cutoff", .default_value = "3.5" },
     .{ .name = "redacted",                         .value = .bool_optional,                  .description = "Redact secrets in output",     .default_value = "true" },
@@ -246,8 +247,7 @@ fn buildScanArgs(alloc: std.mem.Allocator, writer: anytype, parsed: anytype, sub
     args.json = zecli.parseBool(parsed.last("json") orelse "false") catch unreachable;
     args.summary = zecli.parseBool(parsed.last("summary") orelse "false") catch unreachable;
     args.one_line = zecli.parseBool(parsed.last("one-line") orelse "false") catch unreachable;
-    args.env_explicit = parsed.last("env") != null;
-    args.hist_explicit = parsed.last("hist") != null;
+    args.read_stdin = zecli.parseBool(parsed.last("stdin") orelse "false") catch unreachable;
     return args;
 }
 
@@ -295,8 +295,7 @@ fn defaultArgs(subcommand: Subcommand) Args {
         .one_line = false,
         .all_content = false,
         .thorough = false,
-        .env_explicit = false,
-        .hist_explicit = false,
+        .read_stdin = false,
     };
 }
 

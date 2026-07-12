@@ -4,13 +4,6 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
-# Detach the script from any inherited pipe/file stdin (CI runs with a piped
-# stdin). shg treats a piped stdin as history-to-scan, which would suppress the
-# configured-path and env scans these tests exercise. /dev/null is a character
-# device, so it is not treated as piped history. Tests that need piped input
-# pipe it explicitly.
-exec < /dev/null
-
 shg=${SHG_BIN:-zig-out/bin/shg}
 shg_config=${SHG_CONFIG_BIN:-zig-out/bin/shg-config}
 
@@ -111,12 +104,18 @@ printf '%s\n' "$output" | grep -q "$histfile"
 printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS environment history path"
 
-say "TEST piped history"
-run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false' sh "$xdg" "$shg"
+say "TEST piped history with --stdin"
+run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --stdin --hist=false --env=false' sh "$xdg" "$shg"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q '<stdin>'
 printf '%s\n' "$output" | grep -q '\[known_token\]'
-say "PASS piped history"
+say "PASS piped history with --stdin"
+
+say "TEST piped stdin is ignored without --stdin"
+run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --hist=false --env=false' sh "$xdg" "$shg"
+test "$status" -eq 0
+printf '%s\n' "$output" | grep -q 'No findings detected.'
+say "PASS piped stdin is ignored without --stdin"
 
 say "TEST oversized history line is skipped, scan continues"
 longfile=$tmp/long_history
@@ -129,12 +128,6 @@ test "$status" -eq 1
 printf '%s\n' "$output" | grep -q 'skipped 1 oversized line(s)'
 printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS oversized history line is skipped, scan continues"
-
-say "TEST explicit path ignores piped history"
-run_capture sh -c 'printf "%s\n" "echo ghp_abcdefghijklmnopqrstuvwxyz012345" | env XDG_CONFIG_HOME="$1" "$2" scan --env false --path "$3"' sh "$xdg" "$shg" "$fp"
-test "$status" -eq 0
-printf '%s\n' "$output" | grep -q 'No findings detected.'
-say "PASS explicit path ignores piped history"
 
 say "TEST scan true-positive corpus"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$tp" --level low

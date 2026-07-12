@@ -94,8 +94,9 @@ zshaddhistory() {
     # "# SHGNOK" — skip check, suppress history write immediately.
     [[ "$cmd" == *"# SHGNOK" ]] && return 1
 
+    # --stdin scans the piped command; --hist/--env off so only it is checked.
     local H M L
-    read H M L < <(printf '%s\n' "$cmd" | shg scan --level=medium --summary 2>/dev/null)
+    read H M L < <(printf '%s\n' "$cmd" | shg scan --stdin --hist=false --env=false --level=medium --summary 2>/dev/null)
     if (( H + M + L > 0 )); then
         print -P "%F{red}[shg] Warning: possible secret detected — not saved to history.%f" >&2
         return 1

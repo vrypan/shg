@@ -91,6 +91,7 @@ shg scan [options]
 
 Options:
   -p, --path <PATH>            History file or directory to scan [repeatable]
+      --stdin[=BOOL]           Also scan history piped on stdin [default: false]
       --env[=BOOL]             Scan environment variables [default: true]
       --hist[=BOOL]            Scan history files [default: true]
       --level <LEVEL>          low|medium|high [default: high]
@@ -119,8 +120,13 @@ of a tree such as AI agent session logs:
 shg scan --env=false --path ~/.claude/projects
 ```
 
-When history is piped via stdin, only stdin is scanned — env and history files
-are skipped unless explicitly requested with `--env=true` or `--hist=true`.
+To scan history piped on stdin, pass `--stdin` explicitly — there is no
+auto-detection, so a stray pipe never silently suppresses the normal scan. To
+scan *only* the piped input, disable the other sources:
+
+```sh
+history | shg scan --stdin --hist=false --env=false
+```
 
 **Exit codes:**
 
@@ -141,7 +147,7 @@ shg scan --level high && echo "clean"
 > Use a shell helper if you want scans to include the latest interactive history
 > without forcing zsh to write the history file:  
 >
-> `shg-scan() { fc -l 1 | shg scan "$@" }`
+> `shg-scan() { fc -l 1 | shg scan --stdin --hist=false --env=false "$@" }`
 >
 > [INTEGRATIONS.md](INTEGRATIONS.md) also provides a snippet that will prevent
 > sensitive info from being written to history in the first place.

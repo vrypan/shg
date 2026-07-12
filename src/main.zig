@@ -81,9 +81,10 @@ fn run(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
-    const stdin_is_piped = args.paths.len == 0 and try stdinHasHistory(io);
-
-    if (args.scan_hist and stdin_is_piped) {
+    // Stdin is scanned only when explicitly requested with --stdin. There is no
+    // auto-detection: a stray pipe (an empty pipe in CI, a hook, /dev/null) must
+    // never silently take over and suppress the configured scans.
+    if (args.read_stdin) {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -96,8 +97,7 @@ fn run(init: std.process.Init) !void {
         try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
 
-    // Scan history paths when: not piped, OR piped but --hist was explicitly requested.
-    if (args.scan_hist and (!stdin_is_piped or args.hist_explicit)) {
+    if (args.scan_hist) {
         const paths: []const []const u8 = if (args.paths.len > 0)
             try sources.expandExplicitPaths(io, arena_alloc, init.environ_map, args.paths)
         else
@@ -137,9 +137,7 @@ fn run(init: std.process.Init) !void {
         }
     }
 
-    // When piped, skip env unless --env was explicitly passed.
-    const do_scan_env = args.scan_env and (!stdin_is_piped or args.env_explicit);
-    if (do_scan_env) {
+    if (args.scan_env) {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -155,13 +153,6 @@ fn run(init: std.process.Init) !void {
     try stdout.flush();
 
     if (has_findings) std.process.exit(1);
-}
-
-fn stdinHasHistory(io: Io) !bool {
-    const stdin = Io.File.stdin();
-    if (try stdin.isTty(io)) return false;
-    const stat = try stdin.stat(io);
-    return stat.kind == .file or stat.kind == .named_pipe;
 }
 
 fn colorEnabled(io: Io, environ: *const std.process.Environ.Map) !bool {
