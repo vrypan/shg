@@ -44,31 +44,119 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     else
         try sources.discover(io, alloc, environ, cache);
 
+    const is_tty = Io.File.stdout().isTty(io) catch false;
+    var stdin_buf: [256]u8 = undefined;
+    var stdin_reader = Io.File.stdin().readerStreaming(io, &stdin_buf);
+
+    var any_candidate = false;
     var total: usize = 0;
     var files_with: usize = 0;
+
     for (files) |path| {
         const bytes = readFile(io, alloc, path) catch continue;
         const cands = try collectCandidates(bytes, path, alloc, cache, args.level);
         if (cands.len == 0) continue;
+        any_candidate = true;
         files_with += 1;
-
-        // Read-only until Phase 3: list the candidates. Interactive removal and
-        // the atomic rewrite are added next.
-        for (cands) |c| {
-            const shown = if (args.redacted) c.redacted else c.full;
-            try stdout.interface.print("{s}:{d}  {s}\n", .{ path, c.start, shown });
-        }
         total += cands.len;
+
+        if (args.dry_run) {
+            for (cands) |c| {
+                const shown = if (args.redacted) c.redacted else c.full;
+                try stdout.interface.print("{s}:{d}  {s}\n", .{ path, c.start, shown });
+            }
+            continue;
+        }
+
+        // Decide per candidate (prompt, or confirm all with --yes), collect the
+        // confirmed line spans, then rewrite the file once.
+        var spans: std.ArrayList([2]usize) = .empty;
+        for (cands) |c| {
+            const confirm = if (args.yes)
+                true
+            else
+                try promptRemove(&stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
+            if (confirm) try spans.append(alloc, .{ c.start, c.end });
+        }
+        if (spans.items.len == 0) continue;
+        try rewriteFile(io, alloc, path, bytes, spans.items);
+        const noun = if (spans.items.len == 1) "entry" else "entries";
+        try stdout.interface.print("Removed {d} {s} from {s}.\n", .{ spans.items.len, noun, path });
     }
 
-    if (total == 0) {
+    if (!any_candidate) {
         try stdout.interface.writeAll("No secrets found in history files.\n");
         return;
     }
-    const noun = if (total == 1) "entry" else "entries";
-    try stdout.interface.print("\n{d} {s} would be removed across {d} file(s).\n", .{ total, noun, files_with });
+    if (args.dry_run) {
+        const noun = if (total == 1) "entry" else "entries";
+        try stdout.interface.print("\n{d} {s} would be removed across {d} file(s).\n", .{ total, noun, files_with });
+    }
     try stdout.flush();
     std.process.exit(1);
+}
+
+// Show a candidate and ask whether to remove it. After the answer, on a TTY and
+// when the value was shown in full, redraw the entry line in place with the
+// secret redacted so scrollback never accumulates full secrets.
+fn promptRemove(stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c: Candidate, redacted: bool, is_tty: bool) !bool {
+    const w = &stdout.interface;
+    const shown = if (redacted) c.redacted else c.full;
+    try w.print("{s}:{d}  {s}\n", .{ path, c.start, shown });
+    try w.writeAll("Remove this entry? [y/N] ");
+    try stdout.flush();
+
+    const line = (stdin.takeDelimiter('\n') catch return false) orelse return false;
+    const ans = std.mem.trim(u8, line, " \t\r\n");
+    const yes = std.ascii.eqlIgnoreCase(ans, "y") or std.ascii.eqlIgnoreCase(ans, "yes");
+
+    if (is_tty and !redacted) {
+        const tag = if (yes) "\u{2192} removed" else "\u{2192} kept";
+        // Cursor is one row below the prompt: up 2 to the entry row, clear it,
+        // reprint redacted + outcome, back down 2.
+        try w.print("\x1b[2A\r\x1b[2K{s}:{d}  {s}  {s}\x1b[2B\r", .{ path, c.start, c.redacted, tag });
+        try stdout.flush();
+    }
+    return yes;
+}
+
+// Rewrite `path` with the given 1-based inclusive line spans removed, via an
+// atomic temp-file + rename. No backup is made (it would replicate the secret);
+// the temp file is deleted on any error before the rename completes.
+fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []const u8, spans: []const [2]usize) !void {
+    var out: std.ArrayList(u8) = .empty;
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    var line: usize = 0;
+    var first = true;
+    while (it.next()) |seg| {
+        line += 1;
+        if (inSpan(line, spans)) continue;
+        if (!first) try out.append(alloc, '\n');
+        try out.appendSlice(alloc, seg);
+        first = false;
+    }
+
+    // Temp file in the same directory as the target (so the rename is an atomic
+    // same-filesystem move). One temp per file per run; it is overwritten if a
+    // stale one exists, and renamed/deleted before this returns.
+    const tmp = try std.fmt.allocPrint(alloc, "{s}.shg-tmp", .{path});
+    errdefer Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+    {
+        const f = try Io.Dir.createFileAbsolute(io, tmp, .{});
+        defer f.close(io);
+        var wbuf: [8192]u8 = undefined;
+        var writer = f.writerStreaming(io, &wbuf);
+        try writer.interface.writeAll(out.items);
+        try writer.flush();
+    }
+    try Io.Dir.renameAbsolute(tmp, path, io);
+}
+
+fn inSpan(line: usize, spans: []const [2]usize) bool {
+    for (spans) |s| {
+        if (line >= s[0] and line <= s[1]) return true;
+    }
+    return false;
 }
 
 fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocator, cache: rules.Cache, level: Severity) ![]Candidate {
