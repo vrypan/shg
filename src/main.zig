@@ -10,12 +10,8 @@ const report = @import("report.zig");
 const rules = @import("rules.zig");
 const detect = @import("detect.zig");
 const agents = @import("agents.zig");
-const agent_formats = @import("agent_formats.zig");
 const fix_mod = @import("fix.zig");
-
-const zsh_parser = @import("parsers/zsh.zig");
-const fish_parser = @import("parsers/fish.zig");
-const jsonl_parser = @import("parsers/jsonl.zig");
+const history_parse = @import("history_parse.zig");
 
 const Entry = entry_mod.Entry;
 const Severity = finding_mod.Severity;
@@ -98,7 +94,7 @@ fn run(init: std.process.Init) !void {
         var read_buf: [65536]u8 = undefined;
         var reader = Io.File.stdin().readerStreaming(io, &read_buf);
         var skipped: usize = 0;
-        const entries = try parseFile(&reader.interface, "<stdin>", a, &skipped);
+        const entries = try history_parse.parseFile(&reader.interface, "<stdin>", a, &skipped);
         warnSkippedLines(io, "<stdin>", skipped);
         try scanEntries(entries, a, args.entropy_threshold, args.level, report_opts, rules_cache, &stdout, &counts, &has_findings);
     }
@@ -129,7 +125,7 @@ fn run(init: std.process.Init) !void {
             var skipped: usize = 0;
             // A path that opens but cannot be read (e.g. a directory, or a
             // transient error) is skipped rather than aborting the whole scan.
-            const entries = parseFile(&reader.interface, path, a, &skipped) catch |err| {
+            const entries = history_parse.parseFile(&reader.interface, path, a, &skipped) catch |err| {
                 if (err != error.FileNotFound and err != error.AccessDenied) {
                     var perr_buf: [4096]u8 = undefined;
                     var perr = Io.File.stderr().writerStreaming(io, &perr_buf);
@@ -178,38 +174,6 @@ fn loadRulesCache(io: Io, alloc: std.mem.Allocator, environ: *const std.process.
     var reader = file.reader(io, &read_buf);
     const bytes = try reader.interface.readAlloc(alloc, @intCast(stat.size));
     return try rules.Cache.init(bytes);
-}
-
-fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Entry {
-    if (std.mem.indexOf(u8, path, "fish_history") != null)
-        return fish_parser.parse(reader, path, alloc, skipped);
-    // Agent command histories are JSONL files of typed prompts; treat them as
-    // history (one prompt per entry), not as a generic JSON blob.
-    if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null)
-        return parseAgentHistory(reader, path, .codex_history, alloc);
-    if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null)
-        return parseAgentHistory(reader, path, .claude_history, alloc);
-    if (std.mem.endsWith(u8, path, ".jsonl"))
-        return jsonl_parser.parse(reader, path, alloc);
-    // The zsh parser also accepts plain one-command-per-line histories. Using it
-    // as the default preserves zsh extended metadata for explicit --path scans.
-    return zsh_parser.parse(reader, path, alloc, skipped);
-}
-
-fn parseAgentHistory(reader: *Io.Reader, path: []const u8, format: agent_formats.Format, alloc: std.mem.Allocator) ![]Entry {
-    const bytes = try reader.allocRemaining(alloc, Io.Limit.limited(512 * 1024 * 1024));
-    const pieces = try agent_formats.extract(format, bytes, alloc);
-    var entries: std.ArrayList(Entry) = .empty;
-    for (pieces) |p| {
-        try entries.append(alloc, .{
-            .file = path,
-            .line = p.line,
-            .timestamp = null,
-            .raw = p.text,
-            .command = p.text,
-        });
-    }
-    return entries.toOwnedSlice(alloc);
 }
 
 fn warnSkippedLines(io: Io, path: []const u8, skipped: usize) void {
@@ -289,7 +253,7 @@ test "explicit zsh-format fixture path preserves extended commands" {
     const alloc = std.testing.allocator;
     var reader = Io.Reader.fixed(": 1715000000:0;export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n");
     var skipped: usize = 0;
-    const entries = try parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
+    const entries = try history_parse.parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);
@@ -491,7 +455,7 @@ test "corpus true positives produce one visible finding per line" {
         ": 1715000004:0;mysql --password s3cr3tDatabasePass99\n";
     var reader = Io.Reader.fixed(input);
     var skipped: usize = 0;
-    const entries = try parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
+    const entries = try history_parse.parseFile(&reader, "zsh_sample.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);
@@ -528,7 +492,7 @@ test "corpus false positives produce no visible findings" {
         "kubectl get pods\n";
     var reader = Io.Reader.fixed(input);
     var skipped: usize = 0;
-    const entries = try parseFile(&reader, "bash_safe.txt", alloc, &skipped);
+    const entries = try history_parse.parseFile(&reader, "bash_safe.txt", alloc, &skipped);
     defer {
         for (entries) |e| {
             alloc.free(e.command);
