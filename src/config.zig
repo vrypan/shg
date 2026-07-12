@@ -3,6 +3,7 @@ const std = @import("std");
 pub const ignore_default_filename = "ignore.default.shg";
 pub const match_default_filename = "match.default.shg";
 pub const paths_default_filename = "paths.default.shg";
+pub const agent_paths_default_filename = "paths.agents.default.shg";
 pub const compiled_filename = "rules.bin";
 
 pub fn configDir(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
@@ -25,6 +26,10 @@ pub fn matchDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.En
 
 pub fn pathsDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
     return configFile(alloc, environ, paths_default_filename);
+}
+
+pub fn agentPathsDefaultFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {
+    return configFile(alloc, environ, agent_paths_default_filename);
 }
 
 pub fn compiledFile(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map) !?[]const u8 {

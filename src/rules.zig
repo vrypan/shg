@@ -9,6 +9,12 @@ pub const RuleKind = enum(u8) {
     ignore = 1,
     check = 2,
     path = 3,
+    // Agent-scoped variants, compiled from `*.agents.shg` and read only by
+    // `shg agents`. Adding these is backward-compatible: older caches never
+    // contain them, and `enumValue` simply gains valid byte values.
+    agent_ignore = 4,
+    agent_check = 5,
+    agent_path = 6,
 };
 
 pub const MatchKind = enum(u8) {
@@ -84,11 +90,28 @@ pub fn matches(rule: Rule, text: []const u8) bool {
 }
 
 pub fn compile(alloc: std.mem.Allocator, ignore_text: []const u8, check_text: []const u8, paths_text: []const u8) ![]u8 {
+    return compileFull(alloc, ignore_text, check_text, paths_text, "", "", "");
+}
+
+/// Compile general and agent-scoped rules into one cache. Agent-scoped buffers
+/// (from `*.agents.shg`) become `agent_*` rule kinds that `scan` ignores.
+pub fn compileFull(
+    alloc: std.mem.Allocator,
+    ignore_text: []const u8,
+    check_text: []const u8,
+    paths_text: []const u8,
+    agent_ignore_text: []const u8,
+    agent_check_text: []const u8,
+    agent_paths_text: []const u8,
+) ![]u8 {
     var parsed: std.ArrayList(Rule) = .empty;
     defer parsed.deinit(alloc);
     try appendRules(alloc, &parsed, .ignore, ignore_text);
     try appendRules(alloc, &parsed, .check, check_text);
-    try appendPaths(alloc, &parsed, paths_text);
+    try appendPaths(alloc, &parsed, .path, paths_text);
+    try appendRules(alloc, &parsed, .agent_ignore, agent_ignore_text);
+    try appendRules(alloc, &parsed, .agent_check, agent_check_text);
+    try appendPaths(alloc, &parsed, .agent_path, agent_paths_text);
 
     var blob: std.ArrayList(u8) = .empty;
     defer blob.deinit(alloc);
@@ -126,12 +149,12 @@ fn appendRules(alloc: std.mem.Allocator, rules: *std.ArrayList(Rule), kind: Rule
     }
 }
 
-fn appendPaths(alloc: std.mem.Allocator, rules: *std.ArrayList(Rule), text: []const u8) !void {
+fn appendPaths(alloc: std.mem.Allocator, rules: *std.ArrayList(Rule), kind: RuleKind, text: []const u8) !void {
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r\n");
         if (line.len == 0 or line[0] == '#') continue;
-        try rules.append(alloc, .{ .kind = .path, .match_kind = .exact, .pattern = line });
+        try rules.append(alloc, .{ .kind = kind, .match_kind = .exact, .pattern = line });
     }
 }
 
@@ -207,4 +230,39 @@ test "compile and read rules cache" {
     try std.testing.expect(try cache.matchesAny(.check, "has custom-secret inside"));
     try std.testing.expectEqualStrings("~/.zsh_history", (try cache.rule(4)).pattern);
     try std.testing.expect(!try cache.matchesAny(.ignore, "other"));
+}
+
+test "compileFull emits agent-scoped kinds distinct from general kinds" {
+    const alloc = std.testing.allocator;
+    const bytes = try compileFull(
+        alloc,
+        "general-ignore",
+        "general-check",
+        "~/.zsh_history",
+        "agent-only-ignore",
+        "agent-only-check",
+        "~/.claude/projects",
+    );
+    defer alloc.free(bytes);
+    const cache = try Cache.init(bytes);
+
+    // General kinds see only general rules; agent kinds see only agent rules.
+    try std.testing.expect(try cache.matchesAny(.ignore, "has general-ignore here"));
+    try std.testing.expect(!try cache.matchesAny(.ignore, "has agent-only-ignore here"));
+    try std.testing.expect(try cache.matchesAny(.agent_ignore, "has agent-only-ignore here"));
+    try std.testing.expect(!try cache.matchesAny(.agent_ignore, "has general-ignore here"));
+    try std.testing.expect(try cache.matchesAny(.check, "has general-check here"));
+    try std.testing.expect(try cache.matchesAny(.agent_check, "has agent-only-check here"));
+
+    // Path rules stay separate: general `path` vs `agent_path`.
+    var general_path: ?[]const u8 = null;
+    var agent_path: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < cache.ruleCount()) : (i += 1) {
+        const r = try cache.rule(i);
+        if (r.kind == .path) general_path = r.pattern;
+        if (r.kind == .agent_path) agent_path = r.pattern;
+    }
+    try std.testing.expectEqualStrings("~/.zsh_history", general_path.?);
+    try std.testing.expectEqualStrings("~/.claude/projects", agent_path.?);
 }
