@@ -115,7 +115,7 @@ const env_spec = zecli.CommandSpec{
 
 const root_spec = zecli.CommandSpec{
     .name        = "shg",
-    .description = "Scan shell history files for accidentally persisted secrets.",
+    .description = "Scan histories, environment, and AI agent transcripts for secrets.",
     .usage       = "shg <command> [options]",
     .extra_help  =
         \\

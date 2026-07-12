@@ -185,13 +185,28 @@ if printf '%s\n' "$output" | grep -q 'ghp_abcdefghijklmnopqrstuvwxyz012345'; the
 fi
 say "PASS compiled config rules"
 
-say "TEST scan agent transcripts (shg agents)"
+say "TEST shg env scans environment only"
+run_capture env -i XDG_CONFIG_HOME="$xdg" SHG_SMOKE_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz012345 "$shg" env
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q '<env>'
+say "PASS shg env scans environment only"
+
+say "TEST shg history scans a history file"
+histf=$tmp/hist_only
+printf '%s\n' 'echo ghp_abcdefghijklmnopqrstuvwxyz012345' > "$histf"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" history --path "$histf"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$histf"
+printf '%s\n' "$output" | grep -q '\[known_token\]'
+say "PASS shg history scans a history file"
+
+say "TEST shg deep scans transcripts (per session)"
 adir=$tmp/agents/.claude/projects/p
 mkdir -p "$adir"
 agent_tok=ghp_abcdefghijklmnopqrstuvwxyz012345
 printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"env dump $agent_tok\"}]}}" > "$adir/s.jsonl"
 printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"again $agent_tok\"}]}}" >> "$adir/s.jsonl"
-run_capture env XDG_CONFIG_HOME="$xdg" "$shg" agents --path "$adir"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$adir"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$adir/s.jsonl"
 printf '%s\n' "$output" | grep -q 'known_token'
@@ -200,9 +215,32 @@ printf '%s\n' "$output" | grep -q 'delete the affected session files'
 # distinct token reported once, not once per occurrence
 test "$(printf '%s\n' "$output" | grep -c 'known_token')" -eq 1
 if printf '%s\n' "$output" | grep -q "$agent_tok"; then
-    printf '%s\n' "agents output leaked full secret" >&2
+    printf '%s\n' "deep output leaked full secret" >&2
     exit 1
 fi
-say "PASS scan agent transcripts (shg agents)"
+say "PASS shg deep scans transcripts (per session)"
+
+say "TEST shg deep is strict by default, --thorough loosens"
+tdir=$tmp/thorough/.claude/projects/p
+mkdir -p "$tdir"
+printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"$agent_tok and max_output_tokens=max_output_tokens_value_here\"}]}}" > "$tdir/s.jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$tdir"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'known_token'
+if printf '%s\n' "$output" | grep -q 'inline_assign'; then
+    printf '%s\n' "deep strict default showed a loose detector" >&2
+    exit 1
+fi
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$tdir" --thorough
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'inline_assign'
+say "PASS shg deep is strict by default, --thorough loosens"
+
+say "TEST deprecated shg agents still works and warns"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" agents --path "$adir"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "'agents' is deprecated"
+printf '%s\n' "$output" | grep -q 'known_token'
+say "PASS deprecated shg agents still works and warns"
 
 say "SMOKE PASS"

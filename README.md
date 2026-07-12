@@ -67,10 +67,22 @@ zig build
 shg <command> [options]
 
 Commands:
-  scan      Scan history files for secrets (default)
-  agents    Scan AI agent transcripts for secrets
+  scan      Scan histories + environment (the everyday check)
+  history   Scan command histories (shell, REPLs, agents)
+  env       Scan environment variables
+  deep      Scan AI agent transcripts (per session)
   version   Print version
 ```
+
+shg groups secret leaks by the *kind* of data, because each has a different
+report format and detection posture:
+
+| Command | Scans | Report | Posture |
+|---|---|---|---|
+| `history` | shell/REPL histories + Codex `history.jsonl` | per line | loose — you typed it |
+| `env` | environment variables | per variable | — |
+| `deep` | AI agent transcripts (concentration files) | per session file, deduplicated | strict — a haystack of code |
+| `scan` | `history` + `env` together | per line | loose |
 
 ### scan
 
@@ -89,6 +101,10 @@ Options:
       --one-line[=BOOL]        One line per finding [default: false]
   -h, --help                   Print help
 ```
+
+`shg scan` is the everyday check: it runs `history` and `env` together.
+`shg history` is `scan` with only histories; `shg env` is `scan` with only the
+environment. All three share the per-line report format below.
 
 By default, `shg scan` checks both environment variables and history files.
 With no `--path` flags, `shg` scans existing paths from `paths.*.shg` plus the
@@ -132,14 +148,23 @@ shg scan --level high && echo "clean"
 
 For shell startup scans and pre-history hooks see [INTEGRATIONS.md](INTEGRATIONS.md).
 
-### agents
+### history / env
+
+`shg history` scans command histories only, and `shg env` scans the
+environment only — the two halves of `scan`, each with the scan flags that
+apply. `history` covers shell (bash/zsh/fish), REPLs (psql/mysql/…), and
+**agent command history**: Codex `~/.codex/history.jsonl` is a list of typed
+prompts, so it is scanned here (per line), not by `deep`.
+
+### deep
 
 ```
-shg agents [options]
+shg deep [options]
 
 Options:
   -p, --path <PATH>     Transcript file or directory to scan [repeatable]
       --all-content     Also scan assistant messages and reasoning
+      --thorough        Run all detectors, not just high-confidence ones
       --level <LEVEL>   low|medium|high [default: high]
       --json            Output findings as NDJSON
 ```
@@ -152,14 +177,14 @@ files that were individually locked down — in a file that is usually not
 gitignored, not permission-hardened, often cloud-synced, and casually shared
 in bug reports.
 
-`shg agents` scans those transcripts for that exposure. It reads the content
+`shg deep` scans those transcripts for that exposure. It reads the content
 that concentrates secrets — user prompts, tool calls, and tool output — and
 skips assistant prose and reasoning unless you pass `--all-content`. Findings
 are grouped **per session file**, and within each file every distinct secret
 is listed **once** with an occurrence count and a redacted context snippet:
 
 ```
-$ shg agents
+$ shg deep
 
 ~/.claude/projects/myapp/3f2c….jsonl
   [!!!] known_token   ghp_****…****2345   (3×, tool_output)
@@ -170,15 +195,23 @@ Rotate each credential, delete the affected session files, and make sure
 this directory is not synced, committed, or world-readable.
 ```
 
-With no `--path`, `shg agents` scans the locations listed in
-`paths.agents.*.shg` (by default `~/.claude/projects`, `~/.codex/sessions`,
-and `~/.codex/history.jsonl`). It never crawls the disk. See
-[Configuration](#configuration) for the agent-scoped `ignore.agents.shg`,
-`match.agents.shg`, and `paths.agents.shg` files.
+Because a transcript is a haystack of code, `deep` is **strict by default**:
+only the high-confidence detectors (known provider tokens, private/SSH keys,
+and your own `match` patterns) fire. Pass `--thorough` to run every detector
+(much noisier on code). `--all-content` and `--thorough` are independent:
+one widens *what text* is scanned, the other *which detectors* count.
+
+With no `--path`, `shg deep` scans the locations listed in `paths.deep.*.shg`
+(by default `~/.claude/projects` and `~/.codex/sessions`). It never crawls the
+disk. See [Configuration](#configuration) for the deep-scoped `ignore.deep.shg`,
+`match.deep.shg`, and `paths.deep.shg` files.
 
 Remediation differs from history: you can't cleanly edit one line of a
 transcript, so the advice is to rotate the credential and delete the session
 file.
+
+> The older `shg agents` command still works as a deprecated alias for
+> `shg deep`.
 
 ## Detection
 
@@ -291,17 +324,18 @@ The config directory contains editable `.shg` files:
 - `match.*.shg` — additional patterns to flag
 - `paths.*.shg` — history paths to scan when `--path` is not used
 
-Files in the reserved `agents` group are scoped to `shg agents` only:
+Files in the reserved `deep` group are scoped to `shg deep` only:
 
-- `ignore.agents.shg` — suppress findings in agent transcripts (does not affect
-  `shg scan`)
-- `match.agents.shg` — extra patterns to flag in agent transcripts only
-- `paths.agents.shg` — transcript locations `shg agents` scans when `--path` is
+- `ignore.deep.shg` — suppress findings in transcripts (does not affect
+  `shg scan`/`history`)
+- `match.deep.shg` — extra patterns to flag in transcripts only
+- `paths.deep.shg` — transcript locations `shg deep` scans when `--path` is
   not used (one path per line, same format as `paths.*.shg`; directories are
   walked recursively)
 
-General `ignore.*` and `match.*` rules apply to both `scan` and `agents`;
-general `paths.*` rules drive `scan` only and are never scanned by `agents`.
+General `ignore.*` and `match.*` rules apply to both `scan`/`history` and
+`deep`; general `paths.*` rules drive `history`/`scan` only and are never
+scanned by `deep`.
 
 Default config templates are maintained as plain text files in `src/defaults/`
 and embedded into `shg-config` at build time.

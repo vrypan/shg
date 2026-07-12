@@ -140,35 +140,37 @@ curl http://internal/api?token=xyz # SHGNOK  ← don't save, no need to scan
 AI coding agents (Claude Code, Codex) store full session transcripts on disk.
 As an agent reads `.env` files, runs `env`, and prints connection strings,
 those secrets are copied verbatim into the transcript — a file that usually
-has none of the protections of the files the secrets came from. `shg agents`
+has none of the protections of the files the secrets came from. `shg deep`
 scans those transcripts for that exposure.
 
 Run it on demand:
 
 ```sh
-shg agents            # scans the configured agent locations
-shg agents --level low # include lower-confidence findings
+shg deep             # scans the configured transcript locations
+shg deep --thorough  # run all detectors, not just high-confidence ones
 ```
 
-With no `--path`, it scans the locations in `paths.agents.*.shg`. The shipped
-`paths.agents.default.shg` covers:
+With no `--path`, it scans the locations in `paths.deep.*.shg`. The shipped
+`paths.deep.default.shg` covers:
 
 ```
 ~/.claude/projects
 ~/.codex/sessions
-~/.codex/history.jsonl
 ```
 
-Add your own locations in `paths.agents.local.shg` (one path per line; `~/`
+Codex's flat command history (`~/.codex/history.jsonl`) is *typed prompts*, so
+it is scanned by `shg history`/`shg scan`, not `deep`.
+
+Add your own locations in `paths.deep.local.shg` (one path per line; `~/`
 expands to home; directories are walked recursively), then run
 `shg-config compile`.
 
-By default `shg agents` scans user prompts, tool calls, and tool output — the
+By default `shg deep` scans user prompts, tool calls, and tool output — the
 content where secrets concentrate. Pass `--all-content` to also scan assistant
 messages and reasoning (noisier, occasionally useful).
 
-Agent transcripts are logs, not editable line by line: when `shg agents`
+Agent transcripts are logs, not editable line by line: when `shg deep`
 flags a session file, rotate the affected credential and delete the file, and
 check the directory is not synced, committed, or world-readable. To silence a
 recurring non-secret without affecting `shg scan`, add a pattern to
-`ignore.agents.shg` and recompile.
+`ignore.deep.shg` and recompile.
