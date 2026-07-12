@@ -12,7 +12,7 @@ const sensitive_keywords = [_][]const u8{
 
 const placeholder_values = [_][]const u8{
     "example", "placeholder", "changeme", "your_", "xxxx", "****",
-    "test123", "password123", "secret123", "dummy", "<", "todo",
+    "test123", "password123", "secret123", "dummy", "<", "todo", "$",
 };
 
 const search_commands = [_][]const u8{
@@ -184,6 +184,15 @@ test "inline assign ignores plain URL query params without secrets" {
     const cs = try detect(e, alloc);
     defer alloc.free(cs);
     try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "inline assign flags shell-variable value as placeholder" {
+    const alloc = std.testing.allocator;
+    const e = Entry{ .file = "test", .line = 1, .timestamp = null, .raw = "export GITHUB_TOKEN=$GH_TOKEN", .command = "export GITHUB_TOKEN=$GH_TOKEN" };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expect(cs[0].signals.is_placeholder);
 }
 
 test "inline assign detects password" {

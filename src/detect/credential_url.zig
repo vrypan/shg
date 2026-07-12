@@ -50,7 +50,21 @@ fn extractPassword(s: []const u8) ?[]const u8 {
     const colon = std.mem.indexOfScalar(u8, userinfo, ':') orelse return null;
     const pass = userinfo[colon + 1 ..];
     if (pass.len == 0) return null;
+    // $VAR / ${VAR} / <placeholder> are references, not secret values.
+    if (pass[0] == '$' or pass[0] == '<') return null;
     return pass;
+}
+
+test "credential url with shell-variable password is not a secret" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "psql postgres://admin:${DB_PASS}@db.internal/prod",
+        .command = "psql postgres://admin:${DB_PASS}@db.internal/prod",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
 }
 
 test "url with colon and at-sign in path is not a credential" {

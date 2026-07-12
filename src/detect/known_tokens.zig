@@ -10,7 +10,7 @@ const min_tail = 8;
 
 const placeholder_values = [_][]const u8{
     "example", "placeholder", "changeme", "your_", "xxxx", "****",
-    "test123", "password123", "secret123", "dummy", "<", "todo",
+    "test123", "password123", "secret123", "dummy", "<", "todo", "$",
 };
 
 pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {

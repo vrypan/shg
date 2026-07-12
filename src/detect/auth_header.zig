@@ -38,7 +38,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                 if (c == '"' or c == '\'' or c == ' ' or c == '\\') break;
             }
             const token = cmd[tok_start..tok_end];
-            if (token.len > 0) {
+            if (token.len > 0 and !isReference(token)) {
                 try results.append(alloc, .{
                     .token = token,
                     .det_type = "auth_header",
@@ -62,6 +62,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                 if (c == ' ' or c == '"' or c == '\'') break;
             }
             if (extractUserinfoPassword(cmd[val_start..val_end])) |token| {
+                if (isReference(token)) continue;
                 try results.append(alloc, .{
                     .token = token,
                     .det_type = "auth_userinfo",
@@ -85,7 +86,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                 if (c == ' ' or c == '"' or c == '\'') break;
             }
             const token = cmd[val_start..val_end];
-            if (token.len > 0) {
+            if (token.len > 0 and !isReference(token)) {
                 try results.append(alloc, .{
                     .token = token,
                     .det_type = "cli_flag_secret",
@@ -112,7 +113,7 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
                 if (c == ' ' or c == '"' or c == '\'') break;
             }
             const token = cmd[val_start..val_end];
-            if (token.len > 0) {
+            if (token.len > 0 and !isReference(token)) {
                 try results.append(alloc, .{
                     .token = token,
                     .det_type = "cli_flag_secret",
@@ -129,11 +130,65 @@ pub fn detect(e: Entry, alloc: std.mem.Allocator) ![]Candidate {
     return results.toOwnedSlice(alloc);
 }
 
+// Values like $VAR, ${VAR} and <placeholder> are references, not secrets.
+fn isReference(token: []const u8) bool {
+    return token.len > 0 and (token[0] == '$' or token[0] == '<');
+}
+
 fn extractUserinfoPassword(s: []const u8) ?[]const u8 {
     const colon = std.mem.indexOfScalar(u8, s, ':') orelse return null;
     const pass = s[colon + 1 ..];
     if (pass.len == 0) return null;
     return pass;
+}
+
+test "bearer placeholder in angle brackets is not a secret" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl -H \"Authorization: Bearer <admin_token>\"",
+        .command = "curl -H \"Authorization: Bearer <admin_token>\"",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "userinfo shell-variable password is not a secret" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl -u admin:$API_PASS https://example.com",
+        .command = "curl -u admin:$API_PASS https://example.com",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "cli flag shell-variable password is not a secret" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "mysql --password $DB_PASS",
+        .command = "mysql --password $DB_PASS",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 0), cs.len);
+}
+
+test "real bearer value is still detected" {
+    const alloc = std.testing.allocator;
+    const e = Entry{
+        .file = "test", .line = 1, .timestamp = null,
+        .raw = "curl -H \"Authorization: Bearer zK9mQx2LwPq44XyTr7Vn\"",
+        .command = "curl -H \"Authorization: Bearer zK9mQx2LwPq44XyTr7Vn\"",
+    };
+    const cs = try detect(e, alloc);
+    defer alloc.free(cs);
+    try std.testing.expectEqual(@as(usize, 1), cs.len);
+    try std.testing.expectEqualStrings("zK9mQx2LwPq44XyTr7Vn", cs[0].token);
 }
 
 test "detect bearer token" {
