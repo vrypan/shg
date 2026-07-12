@@ -75,7 +75,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
             const confirm = if (args.yes)
                 true
             else
-                try promptRemove(&stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
+                try promptRemove(alloc, &stdout, &stdin_reader.interface, path, c, args.redacted, is_tty);
             if (confirm) try spans.append(alloc, .{ c.start, c.end });
         }
         if (spans.items.len == 0) continue;
@@ -99,7 +99,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 // Show a candidate and ask whether to remove it. After the answer, on a TTY and
 // when the value was shown in full, redraw the entry line in place with the
 // secret redacted so scrollback never accumulates full secrets.
-fn promptRemove(stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c: Candidate, redacted: bool, is_tty: bool) !bool {
+fn promptRemove(alloc: std.mem.Allocator, stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c: Candidate, redacted: bool, is_tty: bool) !bool {
     const w = &stdout.interface;
     const shown = if (redacted) c.redacted else c.full;
     try w.print("{s}:{d}  {s}\n", .{ path, c.start, shown });
@@ -111,19 +111,74 @@ fn promptRemove(stdout: *Io.File.Writer, stdin: *Io.Reader, path: []const u8, c:
     const yes = std.ascii.eqlIgnoreCase(ans, "y") or std.ascii.eqlIgnoreCase(ans, "yes");
 
     if (is_tty and !redacted) {
-        const tag = if (yes) "\u{2192} removed" else "\u{2192} kept";
         // Cursor is one row below the prompt: up 2 to the entry row, clear it,
-        // reprint redacted + outcome, back down 2.
-        try w.print("\x1b[2A\r\x1b[2K{s}:{d}  {s}  {s}\x1b[2B\r", .{ path, c.start, c.redacted, tag });
+        // reprint the masked entry + outcome, back down 2.
+        const masked = try redrawText(alloc, path, c.start, c.redacted, yes);
+        try w.print("\x1b[2A\r\x1b[2K{s}\x1b[2B\r", .{masked});
         try stdout.flush();
     }
     return yes;
+}
+
+// The line reprinted in place of a decided entry: the redacted command and the
+// outcome, never the full secret.
+fn redrawText(alloc: std.mem.Allocator, path: []const u8, start: usize, redacted: []const u8, yes: bool) ![]const u8 {
+    const tag = if (yes) "\u{2192} removed" else "\u{2192} kept";
+    return std.fmt.allocPrint(alloc, "{s}:{d}  {s}  {s}", .{ path, start, redacted, tag });
+}
+
+// The last physical line (1-based, inclusive) of a fish entry starting at
+// `start`: the `- cmd:` line plus following indented continuation lines.
+fn fishSpanEnd(lines: []const []const u8, start: usize) usize {
+    var end = start;
+    var pl = start + 1;
+    while (pl <= lines.len and lines[pl - 1].len > 0 and lines[pl - 1][0] == ' ') : (pl += 1) end = pl;
+    return end;
 }
 
 // Rewrite `path` with the given 1-based inclusive line spans removed, via an
 // atomic temp-file + rename. No backup is made (it would replicate the secret);
 // the temp file is deleted on any error before the rename completes.
 fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []const u8, spans: []const [2]usize) !void {
+    const content = try removeLines(alloc, bytes, spans);
+
+    // Temp file in the same directory as the target so the rename is an atomic
+    // same-filesystem move. Create it exclusively so concurrent runs do not
+    // truncate each other's temp files.
+    const stamp = timestampNanos();
+    var attempt: usize = 0;
+    while (attempt < 100) : (attempt += 1) {
+        const tmp = try std.fmt.allocPrint(alloc, "{s}.shg-tmp.{d}.{d}", .{ path, stamp, attempt });
+        const f = Io.Dir.createFileAbsolute(io, tmp, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => return err,
+        };
+        var close_file = true;
+        errdefer if (close_file) f.close(io);
+        errdefer Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+        var wbuf: [8192]u8 = undefined;
+        var writer = f.writerStreaming(io, &wbuf);
+        try writer.interface.writeAll(content);
+        try writer.flush();
+        f.close(io);
+        close_file = false;
+        try Io.Dir.renameAbsolute(tmp, path, io);
+        return;
+    }
+    return error.PathAlreadyExists;
+}
+
+fn timestampNanos() u128 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.REALTIME, &ts) == 0) {
+        return @as(u128, @intCast(ts.sec)) * std.time.ns_per_s + @as(u128, @intCast(ts.nsec));
+    }
+    return @as(u128, @intCast(std.c.getpid()));
+}
+
+// Rebuild file bytes with the given 1-based inclusive line spans removed,
+// preserving the original trailing-newline shape.
+fn removeLines(alloc: std.mem.Allocator, bytes: []const u8, spans: []const [2]usize) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     var line: usize = 0;
@@ -135,21 +190,7 @@ fn rewriteFile(io: Io, alloc: std.mem.Allocator, path: []const u8, bytes: []cons
         try out.appendSlice(alloc, seg);
         first = false;
     }
-
-    // Temp file in the same directory as the target (so the rename is an atomic
-    // same-filesystem move). One temp per file per run; it is overwritten if a
-    // stale one exists, and renamed/deleted before this returns.
-    const tmp = try std.fmt.allocPrint(alloc, "{s}.shg-tmp", .{path});
-    errdefer Io.Dir.deleteFileAbsolute(io, tmp) catch {};
-    {
-        const f = try Io.Dir.createFileAbsolute(io, tmp, .{});
-        defer f.close(io);
-        var wbuf: [8192]u8 = undefined;
-        var writer = f.writerStreaming(io, &wbuf);
-        try writer.interface.writeAll(out.items);
-        try writer.flush();
-    }
-    try Io.Dir.renameAbsolute(tmp, path, io);
+    return out.toOwnedSlice(alloc);
 }
 
 fn inSpan(line: usize, spans: []const [2]usize) bool {
@@ -157,6 +198,56 @@ fn inSpan(line: usize, spans: []const [2]usize) bool {
         if (line >= s[0] and line <= s[1]) return true;
     }
     return false;
+}
+
+test "removeLines removes a middle line and preserves the trailing newline" {
+    const alloc = std.testing.allocator;
+    const out = try removeLines(alloc, "a\nb\nc\n", &.{.{ 2, 2 }});
+    defer alloc.free(out);
+    try std.testing.expectEqualStrings("a\nc\n", out);
+}
+
+test "removeLines without a trailing newline" {
+    const alloc = std.testing.allocator;
+    const out = try removeLines(alloc, "a\nb\nc", &.{.{ 2, 2 }});
+    defer alloc.free(out);
+    try std.testing.expectEqualStrings("a\nc", out);
+}
+
+test "removeLines removes a multi-line span" {
+    const alloc = std.testing.allocator;
+    // Remove lines 3-4 (a fish block), keep 1-2 and 5-6.
+    const out = try removeLines(alloc, "- cmd: a\n  when: 1\n- cmd: b\n  when: 2\n- cmd: c\n  when: 3\n", &.{.{ 3, 4 }});
+    defer alloc.free(out);
+    try std.testing.expectEqualStrings("- cmd: a\n  when: 1\n- cmd: c\n  when: 3\n", out);
+}
+
+test "fishSpanEnd covers the cmd line plus indented continuations" {
+    const lines = [_][]const u8{ "- cmd: x", "  when: 1", "- cmd: y", "  when: 2" };
+    try std.testing.expectEqual(@as(usize, 2), fishSpanEnd(&lines, 1));
+    try std.testing.expectEqual(@as(usize, 4), fishSpanEnd(&lines, 3));
+}
+
+test "fishSpanEnd is the start line when there is no continuation" {
+    const lines = [_][]const u8{ "- cmd: x", "- cmd: y" };
+    try std.testing.expectEqual(@as(usize, 1), fishSpanEnd(&lines, 1));
+}
+
+test "singleLine collapses control characters to spaces" {
+    const alloc = std.testing.allocator;
+    const out = try singleLine(alloc, "a\nb\tc\rd");
+    defer alloc.free(out);
+    try std.testing.expectEqualStrings("a b c d", out);
+}
+
+test "redrawText masks the entry and tags the outcome" {
+    const alloc = std.testing.allocator;
+    const removed = try redrawText(alloc, "/h", 2, "echo ghp_****", true);
+    defer alloc.free(removed);
+    try std.testing.expectEqualStrings("/h:2  echo ghp_****  \u{2192} removed", removed);
+    const kept = try redrawText(alloc, "/h", 5, "x", false);
+    defer alloc.free(kept);
+    try std.testing.expect(std.mem.endsWith(u8, kept, "\u{2192} kept"));
 }
 
 fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocator, cache: rules.Cache, level: Severity) ![]Candidate {
@@ -201,11 +292,7 @@ fn collectCandidates(bytes: []const u8, path: []const u8, alloc: std.mem.Allocat
 
         // Span: one line, or a fish `- cmd:` block plus its indented
         // continuation lines.
-        var end = e.line;
-        if (is_fish) {
-            var pl = e.line + 1;
-            while (pl <= lines.items.len and lines.items[pl - 1].len > 0 and lines.items[pl - 1][0] == ' ') : (pl += 1) end = pl;
-        }
+        const end = if (is_fish) fishSpanEnd(lines.items, e.line) else e.line;
 
         try cands.append(alloc, .{
             .start = e.line,

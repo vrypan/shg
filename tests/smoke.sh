@@ -255,4 +255,67 @@ printf '%s\n' "$output" | grep -q "'agents' is deprecated"
 printf '%s\n' "$output" | grep -q 'known_token'
 say "PASS deprecated shg agents still works and warns"
 
+say "TEST shg fix --dry-run shows the secret and changes nothing"
+fixf=$tmp/fix_history
+fix_tok=ghp_fixremovalabcdefghijklmnopqrstuvwxyz987654
+printf 'ls -la\necho %s\ngit status\n' "$fix_tok" > "$fixf"
+fix_expected=$tmp/fix_expected
+printf 'ls -la\necho %s\ngit status\n' "$fix_tok" > "$fix_expected"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$fixf" --dry-run
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$fix_tok"
+diff "$fix_expected" "$fixf" >/dev/null
+rm -f "$fix_expected"
+say "PASS shg fix --dry-run shows the secret and changes nothing"
+
+say "TEST shg fix --dry-run --redacted hides the secret"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$fixf" --dry-run --redacted
+test "$status" -eq 1
+if printf '%s\n' "$output" | grep -q "$fix_tok"; then
+    printf '%s\n' "fix --redacted leaked the full secret" >&2
+    exit 1
+fi
+say "PASS shg fix --dry-run --redacted hides the secret"
+
+say "TEST shg fix --yes removes the entry, no backup, no leak"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$fixf" --yes
+test "$status" -eq 1
+# the secret line is gone, the clean lines remain
+if grep -q "$fix_tok" "$fixf"; then printf '%s\n' "fix did not remove the secret" >&2; exit 1; fi
+grep -q '^ls -la$' "$fixf"
+grep -q '^git status$' "$fixf"
+# count-only output: the full token never printed
+if printf '%s\n' "$output" | grep -q "$fix_tok"; then printf '%s\n' "fix --yes echoed the secret" >&2; exit 1; fi
+# no backup or temp file left, and the secret is in no file
+ls "$fixf".shg-backup* "$fixf".shg-tmp* 2>/dev/null && { printf '%s\n' "fix left a backup/temp file" >&2; exit 1; }
+if grep -rq "$fix_tok" "$tmp" 2>/dev/null; then printf '%s\n' "the secret survives in some file" >&2; exit 1; fi
+say "PASS shg fix --yes removes the entry, no backup, no leak"
+
+say "TEST shg fix --yes removes an entire fish history block"
+fishf=$tmp/fish_history
+fish_tok=ghp_bcdefghijklmnopqrstuvwxyz012345
+cat > "$fishf" <<EOF
+- cmd: echo clean
+  when: 100
+- cmd: echo $fish_tok
+  when: 200
+  paths:
+    - /tmp
+- cmd: pwd
+  when: 300
+EOF
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" fix --path "$fishf" --yes
+test "$status" -eq 1
+if grep -q "$fish_tok" "$fishf"; then printf '%s\n' "fix did not remove fish secret block" >&2; exit 1; fi
+grep -q '^- cmd: echo clean$' "$fishf"
+grep -q '^  when: 100$' "$fishf"
+grep -q '^- cmd: pwd$' "$fishf"
+grep -q '^  when: 300$' "$fishf"
+if grep -q '^  when: 200$' "$fishf" || grep -q '^  paths:$' "$fishf"; then
+    printf '%s\n' "fix left part of the fish secret block" >&2
+    exit 1
+fi
+ls "$fishf".shg-backup* "$fishf".shg-tmp* 2>/dev/null && { printf '%s\n' "fix left a fish backup/temp file" >&2; exit 1; }
+say "PASS shg fix --yes removes an entire fish history block"
+
 say "SMOKE PASS"

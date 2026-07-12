@@ -71,6 +71,7 @@ Commands:
   history   Scan command histories (shell, REPLs, agents)
   env       Scan environment variables
   deep      Scan AI agent transcripts (per session)
+  fix       Remove confirmed secrets from history files
   version   Print version
 ```
 
@@ -83,6 +84,7 @@ report format and detection posture:
 | `env` | environment variables | per variable | — |
 | `deep` | AI agent transcripts (concentration files) | per session file, deduplicated | strict — a haystack of code |
 | `scan` | `history` + `env` together | per line | loose |
+| `fix` | history files only | edits confirmed entries | remediation |
 
 ### scan
 
@@ -164,6 +166,31 @@ Codex (`~/.codex/history.jsonl`), Claude Code (`~/.claude/history.jsonl`),
 Ollama (`~/.ollama/history`), and Aider (`~/.aider.input.history`). These are
 scanned per line, like shell history. Full agent *transcripts* (tool output,
 etc.) are the concern of `deep`, not `history`.
+
+### fix
+
+```
+shg fix [options]
+
+Options:
+  -p, --path <PATH>      History file or directory to fix [repeatable]
+      --level <LEVEL>    low|medium|high [default: high]
+  -y, --yes              Remove all flagged entries without prompting
+      --dry-run          List what would be removed; change nothing
+      --redacted         Redact the shown secret
+```
+
+`shg fix` re-scans history files and removes confirmed entries from those
+files. It is interactive by default: each candidate is shown in full so you can
+judge it before deleting; pass `--redacted` when screen-sharing or recording.
+Use `--dry-run` to preview without changing files.
+
+When an entry is removed, `shg fix` rewrites the file through an atomic temp
+file and rename. It intentionally creates no backup, because a backup would be
+another plaintext copy of the secret. `--yes` skips prompts and prints only
+per-file counts, never the entries themselves. `fix` is history-only; it does
+not edit environment variables, stdin, or `deep` transcript files, and it does
+not rotate credentials.
 
 ### deep
 
@@ -399,9 +426,9 @@ afterwards to apply the changes.
 - **No telemetry.** Nothing is collected or sent.
 - **Redaction on by default.** Secrets are never printed in full unless
   `--redacted=false` is explicitly passed.
-- **Read-only.** The current release only scans; it does not modify history
-  files. A `fix` subcommand (with atomic writes and automatic backups) is
-  planned for a future release.
+- **Careful writes.** `shg fix` can edit history files, but only by removing
+  confirmed entries through an atomic temp-file rewrite. It creates no backups
+  because a backup would replicate the secret.
 
 ## License
 
