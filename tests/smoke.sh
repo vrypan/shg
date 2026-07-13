@@ -274,7 +274,21 @@ run_capture env XDG_CONFIG_HOME="$xdg" "$shg" history --path "$histf"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$histf"
 printf '%s\n' "$output" | grep -q '\[known_token\]'
+if printf '%s\n' "$output" | grep -q "Run 'shg deep'"; then
+    printf '%s\n' "shell history incorrectly suggested a deep scan" >&2
+    exit 1
+fi
 say "PASS shg history scans a history file"
+
+say "TEST agent command history findings suggest a deep scan"
+agent_history_home=$tmp/agent-history-home
+mkdir -p "$agent_history_home/.codex"
+printf '%s\n' '{"session_id":"demo","ts":1,"text":"token=ghp_abcdefghijklmnopqrstuvwxyz012345"}' > "$agent_history_home/.codex/history.jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" history --path "$agent_history_home/.codex/history.jsonl"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'secrets found in agent command history'
+printf '%s\n' "$output" | grep -q "Run 'shg deep' to scan them"
+say "PASS agent command history findings suggest a deep scan"
 
 say "TEST shg deep scans transcripts (per session)"
 adir=$tmp/agents/.claude/projects/p

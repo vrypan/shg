@@ -76,6 +76,7 @@ fn run(init: std.process.Init) !void {
 
     var counts = [4]usize{ 0, 0, 0, 0 };
     var has_findings = false;
+    var has_agent_history_findings = false;
     const rules_cache = try loadRulesCache(io, arena_alloc, init.environ_map);
     if (rules_cache == null) {
         try stderr.interface.writeAll("shg: no compiled rules found; run shg-config init\n");
@@ -93,6 +94,7 @@ fn run(init: std.process.Init) !void {
         .stdout = &stdout,
         .counts = &counts,
         .has_findings = &has_findings,
+        .has_agent_history_findings = &has_agent_history_findings,
     };
     defer entry_scanner.scratch.deinit();
 
@@ -163,6 +165,9 @@ fn run(init: std.process.Init) !void {
         try stdout.interface.print("{d} {d} {d}\n", .{ counts[3], counts[2], counts[1] });
     } else if (!args.json and !args.one_line) {
         try report.printSummary(&stdout, counts);
+        if (has_agent_history_findings) {
+            try stdout.interface.writeAll("\nWarning: secrets found in agent command history may also be stored in agent session or memory files. Run 'shg deep' to scan them.\n");
+        }
     }
     try stdout.flush();
 
@@ -224,6 +229,7 @@ const EntryScanner = struct {
     stdout: *Io.File.Writer,
     counts: *[4]usize,
     has_findings: *bool,
+    has_agent_history_findings: *bool,
 
     pub fn consume(self: *EntryScanner, e: Entry) !void {
         const alloc = self.scratch.allocator();
@@ -233,6 +239,9 @@ const EntryScanner = struct {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(self.level)) continue;
             self.has_findings.* = true;
+            if (history_parse.isAgentHistoryPath(f.entry.file)) {
+                self.has_agent_history_findings.* = true;
+            }
             self.counts[@intFromEnum(f.severity)] += 1;
             try report.printFinding(self.stdout, f, self.report_opts);
         }

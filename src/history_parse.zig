@@ -25,6 +25,19 @@ pub fn parseFile(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator,
     return zsh_parser.parse(reader, path, alloc, skipped);
 }
 
+/// True for the per-command prompt histories scanned by `shg history`.
+/// Findings here may also have been copied into an agent's fuller transcript.
+pub fn isAgentHistoryPath(path: []const u8) bool {
+    return pathEndsWith(path, "/.codex/history.jsonl", "\\.codex\\history.jsonl") or
+        pathEndsWith(path, "/.claude/history.jsonl", "\\.claude\\history.jsonl") or
+        pathEndsWith(path, "/.ollama/history", "\\.ollama\\history") or
+        pathEndsWith(path, "/.aider.input.history", "\\.aider.input.history");
+}
+
+fn pathEndsWith(path: []const u8, unix_suffix: []const u8, windows_suffix: []const u8) bool {
+    return std.mem.endsWith(u8, path, unix_suffix) or std.mem.endsWith(u8, path, windows_suffix);
+}
+
 pub fn parseEach(reader: *Io.Reader, path: []const u8, alloc: std.mem.Allocator, skipped: *usize, consumer: anytype) !void {
     if (std.mem.indexOf(u8, path, "fish_history") != null)
         return fish_parser.parseEach(reader, path, alloc, skipped, consumer);
@@ -108,4 +121,14 @@ test "parseEach streams fish entries after reading timestamps" {
     try std.testing.expectEqual(@as(?i64, 100), consumer.entries.items[0].timestamp);
     try std.testing.expectEqualStrings("pwd", consumer.entries.items[1].command);
     try std.testing.expectEqual(@as(?i64, 200), consumer.entries.items[1].timestamp);
+}
+
+test "isAgentHistoryPath recognizes supported command histories" {
+    try std.testing.expect(isAgentHistoryPath("/home/u/.codex/history.jsonl"));
+    try std.testing.expect(isAgentHistoryPath("/home/u/.claude/history.jsonl"));
+    try std.testing.expect(isAgentHistoryPath("/home/u/.ollama/history"));
+    try std.testing.expect(isAgentHistoryPath("/home/u/.aider.input.history"));
+    try std.testing.expect(isAgentHistoryPath("C:\\Users\\u\\.codex\\history.jsonl"));
+    try std.testing.expect(!isAgentHistoryPath("/home/u/.zsh_history"));
+    try std.testing.expect(!isAgentHistoryPath("/tmp/history.jsonl"));
 }
