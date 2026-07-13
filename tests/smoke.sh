@@ -81,6 +81,27 @@ printf '%s\n' "$output" | grep -q "$home/.zsh_history"
 printf '%s\n' "$output" | grep -q '\[known_token\]'
 say "PASS configured history paths"
 
+say "TEST configured path exclusions and explicit override"
+printf '%s\n' '!~/.zsh_history' > "$xdg/shg/paths.exclude.shg"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
+test "$status" -eq 0
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" status
+test "$status" -eq 0
+printf '%s\n' "$output" | grep -q '!~/.zsh_history'
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" HISTFILE="$home/.zsh_history" "$shg" scan --env false
+test "$status" -eq 0
+if printf '%s\n' "$output" | grep -q "$home/.zsh_history"; then
+    printf '%s\n' "excluded history path was scanned" >&2
+    exit 1
+fi
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$home" "$shg" history --path "$home/.zsh_history"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q '\[known_token\]'
+rm -f "$xdg/shg/paths.exclude.shg"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
+test "$status" -eq 0
+say "PASS configured path exclusions and explicit override"
+
 say "TEST a directory in the discovered paths does not abort the scan"
 # A HISTFILE (or configured path) pointing at a directory must be skipped,
 # not crash the whole scan with an unreadable-file error.
@@ -242,6 +263,13 @@ if printf '%s\n' "$output" | grep -q 'malformed JSONL'; then
     printf '%s\n' "deep treated non-JSONL support files as transcripts" >&2
     exit 1
 fi
+escape=$(printf '\033')
+case $output in
+    *"$escape"*)
+        printf '%s\n' "deep emitted terminal progress to captured output" >&2
+        exit 1
+        ;;
+esac
 # distinct token reported once, not once per occurrence
 test "$(printf '%s\n' "$output" | grep -c 'known_token')" -eq 1
 if printf '%s\n' "$output" | grep -q "$agent_tok"; then
@@ -273,6 +301,34 @@ run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$tdir" --thorough
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q 'inline_assign'
 say "PASS shg deep is strict by default, --thorough loosens"
+
+say "TEST shg deep excludes configured subtrees"
+deep_root=$tmp/deep-exclude
+deep_home=$tmp/deep-home
+mkdir -p "$deep_root/keep" "$deep_root/excluded" "$deep_home"
+printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"$agent_tok\"}}" > "$deep_root/keep/session.jsonl"
+printf '%s\n' '# Debug memory' '-----BEGIN PRIVATE KEY-----' > "$deep_root/excluded/MEMORY.md"
+printf '%s\n' "$deep_root" "!$deep_root/excluded" > "$xdg/shg/paths.deep.exclude.shg"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
+test "$status" -eq 0
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$deep_home" "$shg" deep
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$deep_root/keep/session.jsonl"
+if printf '%s\n' "$output" | grep -q "$deep_root/excluded"; then
+    printf '%s\n' "excluded deep subtree was scanned" >&2
+    exit 1
+fi
+if printf '%s\n' "$output" | grep -q 'private_key'; then
+    printf '%s\n' "excluded deep subtree produced a finding" >&2
+    exit 1
+fi
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$deep_home" "$shg" deep --path "$deep_root/excluded"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q 'private_key'
+rm -f "$xdg/shg/paths.deep.exclude.shg"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" compile
+test "$status" -eq 0
+say "PASS shg deep excludes configured subtrees"
 
 say "TEST deprecated shg agents still works and warns"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" agents --path "$adir"

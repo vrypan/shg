@@ -267,6 +267,12 @@ other file types as line-based plain text. This includes Claude memory and
 detached tool-result files. See [Configuration](#configuration) for the
 deep-scoped `ignore.deep.shg`, `match.deep.shg`, and `paths.deep.shg` files.
 
+On an interactive terminal, `deep` shows one progress line per configured or
+explicit path, including the file currently being scanned. Completed lines
+remain above the findings with their scanned file and distinct flag counts.
+Progress is written to standard error and is disabled for `--json`, pipes, and
+other non-TTY output.
+
 Remediation differs from history: you can't cleanly edit one line of a
 transcript, so the advice is to rotate the credential and delete the session
 file.
@@ -398,6 +404,16 @@ General `ignore.*` and `match.*` rules apply to both `scan`/`history` and
 `deep`; general `paths.*` rules drive `history`/`scan` only and are never
 scanned by `deep`.
 
+Prefix a configured path with `!` to exclude that exact path and everything
+beneath it. Exclusions are independent of rule order and also apply to
+`HISTFILE`; explicit `--path` arguments are never filtered by configuration.
+Keep local exclusions separate from the default files:
+
+```text
+# paths.deep.local.shg
+!~/.claude/projects/-Users-vrypan-Devel-histguard/memory
+```
+
 Default config templates are maintained as plain text files in `src/defaults/`
 and embedded into `shg-config` at build time.
 
@@ -409,7 +425,8 @@ Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
 `shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
 without a prefix are substring matches. `paths.*.shg` files are one path per
-line, and a leading `~/` expands to the user's home directory.
+line, and a leading `~/` expands to the user's home directory. A leading `!`
+marks a path exclusion rather than a path to scan.
 
 Ignore rules take precedence over match rules. If the same text appears in both
 `match.default.shg` and `ignore.my.shg`, the matching command is suppressed and

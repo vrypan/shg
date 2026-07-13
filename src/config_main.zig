@@ -393,6 +393,11 @@ fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Env
         for (known.items) |p| alloc.free(p);
         known.deinit(alloc);
     }
+    var excluded: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (excluded.items) |p| alloc.free(p);
+        excluded.deinit(alloc);
+    }
     if (try config.compiledFile(alloc, environ)) |cp| {
         defer alloc.free(cp);
         if (Io.Dir.openFileAbsolute(io, cp, .{})) |f| {
@@ -406,11 +411,18 @@ fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Env
                         while (i < cache.ruleCount()) : (i += 1) {
                             const r = cache.rule(i) catch continue;
                             if (r.kind != .path) continue;
-                            const expanded = if (std.mem.startsWith(u8, r.pattern, "~/"))
-                                try std.fs.path.join(alloc, &.{ home, r.pattern[2..] })
+                            const negative = std.mem.startsWith(u8, r.pattern, "!");
+                            const pattern = if (negative) std.mem.trim(u8, r.pattern[1..], " \t") else r.pattern;
+                            if (pattern.len == 0) continue;
+                            const expanded = if (std.mem.startsWith(u8, pattern, "~/"))
+                                try std.fs.path.join(alloc, &.{ home, pattern[2..] })
                             else
-                                try alloc.dupe(u8, r.pattern);
-                            try known.append(alloc, expanded);
+                                try alloc.dupe(u8, pattern);
+                            if (negative) {
+                                try excluded.append(alloc, expanded);
+                            } else {
+                                try known.append(alloc, expanded);
+                            }
                         }
                     } else |_| {}
                 } else |_| {}
@@ -427,6 +439,14 @@ fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Env
             if (std.mem.eql(u8, path, k)) {
                 already = true;
                 break;
+            }
+        }
+        if (!already) {
+            for (excluded.items) |root| {
+                if (pathIsWithin(path, root)) {
+                    already = true;
+                    break;
+                }
             }
         }
         if (!already) try novel.append(alloc, path);
@@ -474,6 +494,11 @@ fn runDiscover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Env
 
     try stdout.interface.print("wrote {s}\n", .{local_path});
     try stdout.interface.writeAll("Run 'shg-config compile' to apply changes.\n");
+}
+
+fn pathIsWithin(path: []const u8, root: []const u8) bool {
+    if (std.mem.eql(u8, path, root)) return true;
+    return path.len > root.len and std.mem.startsWith(u8, path, root) and std.fs.path.isSep(path[root.len]);
 }
 
 fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, stdout: *Io.File.Writer) !void {

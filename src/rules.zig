@@ -266,3 +266,14 @@ test "compileFull emits deep-scoped kinds distinct from general kinds" {
     try std.testing.expectEqualStrings("~/.zsh_history", general_path.?);
     try std.testing.expectEqualStrings("~/.claude/projects", deep_path.?);
 }
+
+test "path compilation preserves leading exclusions" {
+    const alloc = std.testing.allocator;
+    const bytes = try compile(alloc, "", "", "~/.zsh_history\n!~/.cache/history\n");
+    defer alloc.free(bytes);
+    const cache = try Cache.init(bytes);
+
+    try std.testing.expectEqual(@as(usize, 2), cache.ruleCount());
+    try std.testing.expectEqualStrings("~/.zsh_history", (try cache.rule(0)).pattern);
+    try std.testing.expectEqualStrings("!~/.cache/history", (try cache.rule(1)).pattern);
+}

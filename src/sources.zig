@@ -4,18 +4,25 @@ const rules = @import("rules.zig");
 
 pub fn discover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache) ![][]const u8 {
     var results: std.ArrayList([]const u8) = .empty;
+    const exclusions = try pathExclusions(alloc, environ, cache, .path);
+    defer freePaths(alloc, exclusions);
 
-    try appendEnvHistoryPaths(io, alloc, environ, &results);
+    try appendEnvHistoryPaths(io, alloc, environ, &results, exclusions);
 
     var i: usize = 0;
     while (i < cache.ruleCount()) : (i += 1) {
         const rule = try cache.rule(i);
         if (rule.kind != .path) continue;
+        if (isExclusion(rule.pattern)) continue;
 
         const path = try expandPath(alloc, environ, rule.pattern);
         if (path) |resolved| {
+            if (isExcluded(resolved, exclusions)) {
+                alloc.free(resolved);
+                continue;
+            }
             if (isDirectory(io, resolved)) {
-                try appendDirectoryFiles(io, alloc, &results, resolved);
+                try appendDirectoryFiles(io, alloc, &results, resolved, exclusions);
                 alloc.free(resolved);
             } else {
                 try appendExistingPath(io, alloc, &results, resolved);
@@ -26,29 +33,74 @@ pub fn discover(io: Io, alloc: std.mem.Allocator, environ: *const std.process.En
     return results.toOwnedSlice(alloc);
 }
 
-/// Expand the compiled `deep_path` rules into concrete files for `shg agents`.
-/// Mirrors `discover` but reads only deep_path rules (never general `path`
-/// rules or HISTFILE), so deep discovery stays bounded to paths.deep.*.shg.
-pub fn deepPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache) ![][]const u8 {
-    var results: std.ArrayList([]const u8) = .empty;
+pub const DeepFile = struct {
+    path: []const u8,
+    root_index: usize,
+};
+
+pub const DeepDiscovery = struct {
+    roots: []const []const u8,
+    files: []const DeepFile,
+};
+
+/// Expand compiled deep paths while retaining the root associated with each
+/// file. This lets `shg deep` report progress once per configured path.
+pub fn discoverDeep(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache) !DeepDiscovery {
+    var roots: std.ArrayList([]const u8) = .empty;
+    var paths: std.ArrayList([]const u8) = .empty;
+    const exclusions = try pathExclusions(alloc, environ, cache, .deep_path);
+    defer freePaths(alloc, exclusions);
 
     var i: usize = 0;
     while (i < cache.ruleCount()) : (i += 1) {
         const rule = try cache.rule(i);
         if (rule.kind != .deep_path) continue;
+        if (isExclusion(rule.pattern)) continue;
 
         const path = try expandPath(alloc, environ, rule.pattern);
         if (path) |resolved| {
-            if (isDirectory(io, resolved)) {
-                try appendDirectoryFiles(io, alloc, &results, resolved);
+            if (isExcluded(resolved, exclusions)) {
                 alloc.free(resolved);
+                continue;
+            }
+            const root_index = try appendDeepRoot(alloc, &roots, resolved);
+            const root = roots.items[root_index];
+            if (isDirectory(io, root)) {
+                try appendDirectoryFiles(io, alloc, &paths, root, exclusions);
             } else {
-                try appendExistingPath(io, alloc, &results, resolved);
+                try appendExistingPath(io, alloc, &paths, try alloc.dupe(u8, root));
             }
         }
     }
 
-    return results.toOwnedSlice(alloc);
+    const root_slice = try roots.toOwnedSlice(alloc);
+    return .{
+        .roots = root_slice,
+        .files = try groupDeepFiles(alloc, root_slice, &paths),
+    };
+}
+
+/// Strict grouped discovery for explicitly named deep paths.
+pub fn expandExplicitDeepPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, paths: []const []const u8) !DeepDiscovery {
+    var roots: std.ArrayList([]const u8) = .empty;
+    var files: std.ArrayList([]const u8) = .empty;
+
+    for (paths) |raw| {
+        const resolved = (try expandPath(alloc, environ, raw)) orelse return error.InvalidPath;
+        const root_index = try appendDeepRoot(alloc, &roots, resolved);
+        const root = roots.items[root_index];
+        if (isDirectory(io, root)) {
+            try appendDirectoryFilesStrict(io, alloc, &files, root);
+        } else {
+            try appendExplicitFile(io, alloc, &files, try alloc.dupe(u8, root));
+        }
+    }
+
+    const root_slice = try roots.toOwnedSlice(alloc);
+    return .{
+        .roots = root_slice,
+        .files = try groupDeepFiles(alloc, root_slice, &files),
+    };
 }
 
 /// Expand explicit --path arguments: a directory is walked recursively into
@@ -68,7 +120,7 @@ pub fn expandExplicitPaths(io: Io, alloc: std.mem.Allocator, environ: *const std
     return results.toOwnedSlice(alloc);
 }
 
-fn appendEnvHistoryPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, results: *std.ArrayList([]const u8)) !void {
+fn appendEnvHistoryPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, results: *std.ArrayList([]const u8), exclusions: []const []const u8) !void {
     const env_vars = [_][]const u8{
         "HISTFILE",
     };
@@ -76,7 +128,13 @@ fn appendEnvHistoryPaths(io: Io, alloc: std.mem.Allocator, environ: *const std.p
         const value = environ.get(name) orelse continue;
         if (value.len == 0) continue;
         const path = try expandPath(alloc, environ, value);
-        if (path) |resolved| try appendExistingPath(io, alloc, results, resolved);
+        if (path) |resolved| {
+            if (isExcluded(resolved, exclusions)) {
+                alloc.free(resolved);
+            } else {
+                try appendExistingPath(io, alloc, results, resolved);
+            }
+        }
     }
 }
 
@@ -120,18 +178,23 @@ fn appendExplicitFile(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList(
     try results.append(alloc, path);
 }
 
-// Recursively collect all files under dir_path. Does not take ownership of dir_path.
-fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), dir_path: []const u8) !void {
+// Recursively collect non-excluded files under dir_path. Does not take
+// ownership of dir_path.
+fn appendDirectoryFiles(io: Io, alloc: std.mem.Allocator, results: *std.ArrayList([]const u8), dir_path: []const u8, exclusions: []const []const u8) !void {
     var dir = Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true }) catch return;
     defer dir.close(io);
 
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
         const child = try std.fs.path.join(alloc, &.{ dir_path, entry.name });
+        if (isExcluded(child, exclusions)) {
+            alloc.free(child);
+            continue;
+        }
         switch (entry.kind) {
             .file, .unknown => try appendExistingPath(io, alloc, results, child),
             .directory => {
-                try appendDirectoryFiles(io, alloc, results, child);
+                try appendDirectoryFiles(io, alloc, results, child, exclusions);
                 alloc.free(child);
             },
             else => alloc.free(child),
@@ -157,6 +220,86 @@ fn appendDirectoryFilesStrict(io: Io, alloc: std.mem.Allocator, results: *std.Ar
             else => alloc.free(child),
         }
     }
+}
+
+fn appendDeepRoot(alloc: std.mem.Allocator, roots: *std.ArrayList([]const u8), path: []const u8) !usize {
+    for (roots.items, 0..) |existing, index| {
+        if (std.mem.eql(u8, existing, path)) {
+            alloc.free(path);
+            return index;
+        }
+    }
+    try roots.append(alloc, path);
+    return roots.items.len - 1;
+}
+
+fn pathExclusions(alloc: std.mem.Allocator, environ: *const std.process.Environ.Map, cache: rules.Cache, kind: rules.RuleKind) ![][]const u8 {
+    var exclusions: std.ArrayList([]const u8) = .empty;
+    var i: usize = 0;
+    while (i < cache.ruleCount()) : (i += 1) {
+        const rule = try cache.rule(i);
+        if (rule.kind != kind or !isExclusion(rule.pattern)) continue;
+        const raw = std.mem.trim(u8, rule.pattern[1..], " \t");
+        if (raw.len == 0) continue;
+        if (try expandPath(alloc, environ, raw)) |path| try exclusions.append(alloc, path);
+    }
+    return exclusions.toOwnedSlice(alloc);
+}
+
+fn isExclusion(pattern: []const u8) bool {
+    return pattern.len > 0 and pattern[0] == '!';
+}
+
+fn isExcluded(path: []const u8, exclusions: []const []const u8) bool {
+    for (exclusions) |excluded| {
+        if (pathWithinRoot(path, excluded)) return true;
+    }
+    return false;
+}
+
+fn freePaths(alloc: std.mem.Allocator, paths: []const []const u8) void {
+    for (paths) |path| alloc.free(path);
+    alloc.free(paths);
+}
+
+fn groupDeepFiles(alloc: std.mem.Allocator, roots: []const []const u8, paths: *std.ArrayList([]const u8)) ![]DeepFile {
+    var files: std.ArrayList(DeepFile) = .empty;
+    for (paths.items) |path| {
+        const root_index = deepRootIndex(roots, path);
+        try files.append(alloc, .{ .path = path, .root_index = root_index });
+    }
+    paths.deinit(alloc);
+    return files.toOwnedSlice(alloc);
+}
+
+fn deepRootIndex(roots: []const []const u8, path: []const u8) usize {
+    var best: ?usize = null;
+    for (roots, 0..) |root, index| {
+        if (!pathWithinRoot(path, root)) continue;
+        if (best == null or root.len > roots[best.?].len) best = index;
+    }
+    return best orelse 0;
+}
+
+fn pathWithinRoot(path: []const u8, root: []const u8) bool {
+    if (std.mem.eql(u8, path, root)) return true;
+    return path.len > root.len and std.mem.startsWith(u8, path, root) and std.fs.path.isSep(path[root.len]);
+}
+
+test "deep root selection handles equal-length and nested roots" {
+    const equal_roots = [_][]const u8{ "/tmp/one", "/tmp/two" };
+    try std.testing.expectEqual(@as(usize, 1), deepRootIndex(&equal_roots, "/tmp/two/file"));
+
+    const nested_roots = [_][]const u8{ "/tmp/project", "/tmp/project/nested" };
+    try std.testing.expectEqual(@as(usize, 1), deepRootIndex(&nested_roots, "/tmp/project/nested/file"));
+}
+
+test "path exclusions match exact paths and descendants only" {
+    const exclusions = [_][]const u8{"/tmp/project/memory"};
+    try std.testing.expect(isExcluded("/tmp/project/memory", &exclusions));
+    try std.testing.expect(isExcluded("/tmp/project/memory/MEMORY.md", &exclusions));
+    try std.testing.expect(!isExcluded("/tmp/project/memory-other", &exclusions));
+    try std.testing.expect(!isExcluded("/tmp/project/session.jsonl", &exclusions));
 }
 
 test "expandExplicitPaths keeps existing files" {
@@ -186,6 +329,34 @@ test "expandExplicitPaths rejects missing paths" {
 
     const input = [_][]const u8{"/nonexistent/shg/path/xyz"};
     try std.testing.expectError(error.FileNotFound, expandExplicitPaths(std.testing.io, alloc, &env, &input));
+}
+
+test "discoverDeep retains configured roots for files" {
+    const alloc = std.testing.allocator;
+    const cache_bytes = try rules.compileFull(alloc, "", "", "", "", "", "/dev/null");
+    defer alloc.free(cache_bytes);
+    const cache = try rules.Cache.init(cache_bytes);
+
+    var env = std.process.Environ.Map.init(alloc);
+    defer env.deinit();
+
+    const discovery = try discoverDeep(std.testing.io, alloc, &env, cache);
+    defer {
+        for (discovery.roots) |root| alloc.free(root);
+        for (discovery.files) |file| alloc.free(file.path);
+        alloc.free(discovery.roots);
+        alloc.free(discovery.files);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), discovery.roots.len);
+    try std.testing.expectEqualStrings("/dev/null", discovery.roots[0]);
+    if (fileExists(std.testing.io, "/dev/null")) {
+        try std.testing.expectEqual(@as(usize, 1), discovery.files.len);
+        try std.testing.expectEqual(@as(usize, 0), discovery.files[0].root_index);
+        try std.testing.expectEqualStrings("/dev/null", discovery.files[0].path);
+    } else {
+        try std.testing.expectEqual(@as(usize, 0), discovery.files.len);
+    }
 }
 
 test "discover expands configured home paths" {

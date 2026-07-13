@@ -1,5 +1,6 @@
 # shg history paths
 # One path per line. A leading ~/ expands to your home directory.
+# Prefix a path with ! to exclude that path and its descendants.
 ~/.zsh_history
 ~/.bash_history
 ~/.local/share/fish/fish_history

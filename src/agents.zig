@@ -34,6 +34,11 @@ const ScanOutcome = struct {
     malformed: usize,
 };
 
+const MalformedWarning = struct {
+    path: []const u8,
+    count: usize,
+};
+
 pub fn run(init: std.process.Init, args: cli.Args) !void {
     const io = init.io;
     const alloc = init.arena.allocator();
@@ -56,25 +61,37 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 
     // Discovery is bounded: explicit --path arguments, or the compiled
     // deep_path rules (paths.deep.*.shg). Never a disk crawl.
-    const files = if (args.paths.len > 0)
-        try sources.expandExplicitPaths(io, alloc, environ, args.paths)
+    const discovery = if (args.paths.len > 0)
+        try sources.expandExplicitDeepPaths(io, alloc, environ, args.paths)
     else
-        try sources.deepPaths(io, alloc, environ, cache);
+        try sources.discoverDeep(io, alloc, environ, cache);
+
+    var progress = try DeepProgress.init(io, alloc, &stderr, discovery, environ, !args.json);
 
     var results: std.ArrayList(FileResult) = .empty;
+    var malformed_warnings: std.ArrayList(MalformedWarning) = .empty;
     var file_count: usize = 0;
     var malformed_total: usize = 0;
-    for (files) |path| {
-        const outcome = try scanFile(io, alloc, path, args, cache, &detector_context);
+    for (discovery.files) |item| {
+        try progress.startFile(item.root_index, item.path);
+        const outcome = try scanFile(io, alloc, item.path, args, cache, &detector_context);
+        const flag_count = if (outcome.result) |res| res.aggs.len else 0;
+        try progress.finishFile(item.root_index, flag_count);
         if (outcome.malformed > 0) {
             malformed_total += outcome.malformed;
-            try stderr.interface.print("shg: warning: {s}: skipped {d} malformed JSONL record(s)\n", .{ path, outcome.malformed });
+            try malformed_warnings.append(alloc, .{ .path = item.path, .count = outcome.malformed });
         }
         if (outcome.result) |res| {
             try results.append(alloc, res);
             file_count += 1;
         }
     }
+    try progress.complete();
+
+    for (malformed_warnings.items) |warning| {
+        try stderr.interface.print("shg: warning: {s}: skipped {d} malformed JSONL record(s)\n", .{ warning.path, warning.count });
+    }
+    try stderr.flush();
 
     const color = !args.json and try colorEnabled(io, environ);
 
@@ -91,6 +108,158 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
 
     if (malformed_total > 0) std.process.exit(2);
     if (total_secrets > 0) std.process.exit(1);
+}
+
+const DeepProgress = struct {
+    const PathState = struct {
+        label: []const u8,
+        total: usize = 0,
+        scanned: usize = 0,
+        flags: usize = 0,
+        current: ?[]const u8 = null,
+    };
+
+    const spinner = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+    const root_width = 24;
+    const file_width = 44;
+
+    enabled: bool,
+    writer: *Io.File.Writer,
+    roots: []const []const u8,
+    states: []PathState,
+    frame: usize = 0,
+    rendered: bool = false,
+
+    fn init(io: Io, alloc: std.mem.Allocator, writer: *Io.File.Writer, discovery: sources.DeepDiscovery, environ: *const std.process.Environ.Map, requested: bool) !DeepProgress {
+        var enabled = requested and discovery.roots.len > 0 and
+            (Io.File.stderr().isTty(io) catch false) and
+            (Io.File.stdout().isTty(io) catch false);
+        if (enabled) Io.File.stderr().enableAnsiEscapeCodes(io) catch {
+            enabled = false;
+        };
+
+        const states = try alloc.alloc(PathState, discovery.roots.len);
+        const home = environ.get("HOME") orelse environ.get("USERPROFILE");
+        for (states, discovery.roots) |*state, root| {
+            state.* = .{ .label = try compactHomePath(alloc, root, home) };
+        }
+        for (discovery.files) |file| states[file.root_index].total += 1;
+
+        return .{
+            .enabled = enabled,
+            .writer = writer,
+            .roots = discovery.roots,
+            .states = states,
+        };
+    }
+
+    fn startFile(self: *DeepProgress, root_index: usize, path: []const u8) !void {
+        if (!self.enabled) return;
+        self.states[root_index].current = relativePath(self.roots[root_index], path);
+        self.frame = (self.frame + 1) % spinner.len;
+        try self.render();
+    }
+
+    fn finishFile(self: *DeepProgress, root_index: usize, flag_count: usize) !void {
+        if (!self.enabled) return;
+        const state = &self.states[root_index];
+        state.scanned += 1;
+        state.flags += flag_count;
+        if (state.scanned == state.total) {
+            state.current = null;
+            try self.render();
+        }
+    }
+
+    fn complete(self: *DeepProgress) !void {
+        if (!self.enabled) return;
+        var changed = !self.rendered;
+        for (self.states) |*state| {
+            if (state.scanned != state.total or state.current != null) changed = true;
+            state.scanned = state.total;
+            state.current = null;
+        }
+        if (changed) try self.render();
+    }
+
+    fn render(self: *DeepProgress) !void {
+        const w = &self.writer.interface;
+        if (self.rendered) try w.print("\x1b[{d}A", .{self.states.len});
+
+        for (self.states) |state| {
+            try w.writeAll("\r\x1b[2K");
+            if (state.scanned == state.total) {
+                try w.writeAll("✓ ");
+            } else if (state.current != null) {
+                try w.print("{s} ", .{spinner[self.frame]});
+            } else {
+                try w.writeAll("· ");
+            }
+
+            const root_len = try writeMiddleTruncated(w, state.label, root_width);
+            try writePadding(w, root_width - root_len + 1);
+            if (state.scanned == state.total) {
+                try w.print("{d} file{s}  {d} flag{s}", .{
+                    state.total,
+                    if (state.total == 1) "" else "s",
+                    state.flags,
+                    if (state.flags == 1) "" else "s",
+                });
+            } else if (state.current) |current| {
+                try writeTailTruncated(w, current, file_width);
+            }
+            try w.writeByte('\n');
+        }
+        try self.writer.flush();
+        self.rendered = true;
+    }
+};
+
+fn compactHomePath(alloc: std.mem.Allocator, path: []const u8, home: ?[]const u8) ![]const u8 {
+    if (home) |h| {
+        if (std.mem.eql(u8, path, h)) return try alloc.dupe(u8, "~");
+        if (path.len > h.len and std.mem.startsWith(u8, path, h) and std.fs.path.isSep(path[h.len])) {
+            return try std.fmt.allocPrint(alloc, "~{s}", .{path[h.len..]});
+        }
+    }
+    return try alloc.dupe(u8, path);
+}
+
+fn relativePath(root: []const u8, path: []const u8) []const u8 {
+    if (std.mem.eql(u8, root, path)) return std.fs.path.basename(path);
+    if (path.len > root.len and std.mem.startsWith(u8, path, root) and std.fs.path.isSep(path[root.len])) {
+        return path[root.len + 1 ..];
+    }
+    return path;
+}
+
+fn writeMiddleTruncated(writer: *Io.Writer, text: []const u8, max: usize) !usize {
+    if (text.len <= max) {
+        try writer.writeAll(text);
+        return text.len;
+    }
+    const left = (max - 3) / 2;
+    const right = max - 3 - left;
+    try writer.writeAll(text[0..left]);
+    try writer.writeAll("...");
+    try writer.writeAll(text[text.len - right ..]);
+    return max;
+}
+
+fn writeTailTruncated(writer: *Io.Writer, text: []const u8, max: usize) !void {
+    if (text.len <= max) return writer.writeAll(text);
+    try writer.writeAll("...");
+    try writer.writeAll(text[text.len - (max - 3) ..]);
+}
+
+fn writePadding(writer: *Io.Writer, count: usize) !void {
+    var remaining = count;
+    const spaces = " " ** 32;
+    while (remaining > 0) {
+        const n = @min(remaining, spaces.len);
+        try writer.writeAll(spaces[0..n]);
+        remaining -= n;
+    }
 }
 
 fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, cache: rules.Cache, detector_context: *const detect.Context) !ScanOutcome {
@@ -331,6 +500,21 @@ test "scanned honours the default and --all-content sets" {
     try std.testing.expect(!scanned(.reasoning, false));
     try std.testing.expect(scanned(.assistant, true));
     try std.testing.expect(scanned(.reasoning, true));
+}
+
+test "progress paths compact home and show files relative to roots" {
+    const alloc = std.testing.allocator;
+    const compact = try compactHomePath(alloc, "/home/user/.claude/projects", "/home/user");
+    defer alloc.free(compact);
+    try std.testing.expectEqualStrings("~/.claude/projects", compact);
+    try std.testing.expectEqualStrings("app/session.jsonl", relativePath(
+        "/home/user/.claude/projects",
+        "/home/user/.claude/projects/app/session.jsonl",
+    ));
+    try std.testing.expectEqualStrings("history.jsonl", relativePath(
+        "/home/user/.claude/history.jsonl",
+        "/home/user/.claude/history.jsonl",
+    ));
 }
 
 test "windowContext single-lines and trims a long snippet" {
