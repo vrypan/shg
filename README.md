@@ -61,6 +61,26 @@ zig build
 # binaries at zig-out/bin/shg and zig-out/bin/shg-config
 ```
 
+## First run
+
+```sh
+# Initialize rules
+shg-config init
+
+# Optionally find nonstandard history files
+shg-config discover
+
+# Review the active configuration and compiled rules
+shg-config status
+
+# Scan history files
+shg history
+# Scan ENV variables
+shg env
+# Scan recursive paths, like AI agent memory files
+shg deep
+```
+
 To run the deterministic scan benchmark:
 
 ```sh
@@ -303,7 +323,8 @@ Run `shg-config status` to list active detection patterns and rules.
 
 ### Default history paths
 
-The default `paths.default.shg` created by `shg-config defaults` includes:
+The default `paths.default.shg` created by `shg-config init` or
+`shg-config defaults` includes:
 
 | Shell / tool | Path |
 |---|---|
@@ -421,8 +442,10 @@ Put local changes in separate files such as `ignore.my.shg`, `match.work.shg`,
 or `paths.local.shg`. Avoid editing `*.default.shg` directly; future default
 updates may overwrite those files.
 
-Run `shg-config compile` to write `rules.bin`, the binary cache loaded by
-`shg scan`. Rules are line-based; blank lines and `#` comments are ignored.
+Run `shg-config init` after a clean install. It creates missing defaults and
+writes `rules.bin`, the binary cache loaded by `shg scan`. After editing any
+config file, run `shg-config compile` to refresh that cache. Rules are
+line-based; blank lines and `#` comments are ignored.
 Use `exact:`, `prefix:`, or `substr:` prefixes to choose the match type. Lines
 without a prefix are substring matches. `paths.*.shg` files are one path per
 line, and a leading `~/` expands to the user's home directory. A leading `!`
@@ -441,6 +464,12 @@ for additional custom patterns of your own.
 > `match.default.shg` is based on https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
 
 ### shg-config commands
+
+```
+shg-config init
+```
+Create the config directory, write any missing default `.shg` files, and
+compile all active rules into `rules.bin`. Existing config files are preserved.
 
 ```
 shg-config compile

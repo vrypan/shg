@@ -9,6 +9,7 @@ const commands = [_]zecli.CommandEntry{
     .{ .name = "defaults", .description = "Write default .shg config files [-y]" },
     .{ .name = "discover", .description = "Find history files not yet configured" },
     .{ .name = "ignore",   .description = "Add or remove a pattern in ignore.local.shg" },
+    .{ .name = "init",     .description = "Create missing defaults and compile rules.bin" },
     .{ .name = "match",    .description = "Add or remove a pattern in match.local.shg" },
     .{ .name = "status",   .description = "Show active rules and configuration" },
 };
@@ -82,6 +83,7 @@ pub fn main(init: std.process.Init) !void {
         !std.mem.eql(u8, command, "defaults") and
         !std.mem.eql(u8, command, "discover") and
         !std.mem.eql(u8, command, "ignore") and
+        !std.mem.eql(u8, command, "init") and
         !std.mem.eql(u8, command, "match") and
         !std.mem.eql(u8, command, "status"))
     {
@@ -131,7 +133,7 @@ pub fn main(init: std.process.Init) !void {
         try parseDefaultsArgs(raw_args[2..], &stderr)
     else blk: {
         if (raw_args.len != 2) {
-            try stderr.interface.writeAll("error: compile takes no options\n");
+            try stderr.interface.print("error: {s} takes no options\n", .{command});
             try stderr.flush();
             std.process.exit(2);
         }
@@ -176,6 +178,15 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    const is_init = std.mem.eql(u8, command, "init");
+    var has_system_config = false;
+    if (try config.systemConfigDir(alloc, init.environ_map)) |sys_dir| {
+        has_system_config = dirExists(io, sys_dir);
+    }
+    if (is_init and !has_system_config) {
+        try writeDefaults(io, &stdout, default_files[0..], false, false);
+    }
+
     const compiled_path = (try config.compiledFile(alloc, init.environ_map)).?;
 
     var ignore_group: ConfigGroup = .{ .text = "", .count = 0 };
@@ -202,6 +213,25 @@ pub fn main(init: std.process.Init) !void {
     deep_ignore_group = try mergeGroups(alloc, deep_ignore_group, try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .deep));
     deep_match_group  = try mergeGroups(alloc, deep_match_group,  try readConfigGroup(io, alloc, dir, "match.",  ".shg", .deep));
     deep_paths_group  = try mergeGroups(alloc, deep_paths_group,  try readConfigGroup(io, alloc, dir, "paths.",  ".shg", .deep));
+
+    if (is_init) {
+        if (ignore_group.count == 0) {
+            try writeDefault(io, &stdout, default_files[0]);
+            ignore_group = try readConfigGroup(io, alloc, dir, "ignore.", ".shg", .general);
+        }
+        if (match_group.count == 0) {
+            try writeDefault(io, &stdout, default_files[1]);
+            match_group = try readConfigGroup(io, alloc, dir, "match.", ".shg", .general);
+        }
+        if (paths_group.count == 0) {
+            try writeDefault(io, &stdout, default_files[2]);
+            paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg", .general);
+        }
+        if (deep_paths_group.count == 0) {
+            try writeDefault(io, &stdout, default_files[3]);
+            deep_paths_group = try readConfigGroup(io, alloc, dir, "paths.", ".shg", .deep);
+        }
+    }
 
     if (ignore_group.count == 0 or match_group.count == 0 or paths_group.count == 0) {
         try stdout.interface.print("Config files are missing in {s}. \nCreate default ignore.default.shg, match.default.shg, paths.default.shg, and paths.deep.default.shg? \n[y/N] ", .{dir});
@@ -235,6 +265,10 @@ pub fn main(init: std.process.Init) !void {
     try writeFile(io, compiled_path, compiled);
 
     try stdout.interface.print("compiled rules: {s}\n", .{compiled_path});
+    if (is_init) {
+        try stdout.interface.writeAll("Optional: run 'shg-config discover' to find additional history files.\n");
+        try stdout.interface.writeAll("Use 'shg-config status' to see the current rules.\n");
+    }
 }
 
 const default_ignore_rules = @embedFile("defaults/ignore.default.shg");
@@ -272,6 +306,11 @@ fn writeDefaults(io: Io, stdout: *Io.File.Writer, files: []const DefaultFile, fo
         try writeFile(io, file.path, file.bytes);
         try stdout.interface.print("wrote {s}\n", .{file.path});
     }
+}
+
+fn writeDefault(io: Io, stdout: *Io.File.Writer, file: DefaultFile) !void {
+    try writeFile(io, file.path, file.bytes);
+    try stdout.interface.print("wrote {s}\n", .{file.path});
 }
 
 fn promptYes(io: Io) !bool {
@@ -536,7 +575,7 @@ fn runStatus(io: Io, alloc: std.mem.Allocator, environ: *const std.process.Envir
     };
 
     const c = cache orelse {
-        try stdout.interface.writeAll("Compiled rules: none — run shg-config compile\n");
+        try stdout.interface.writeAll("Compiled rules: none — run shg-config init\n");
         return;
     };
 

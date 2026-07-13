@@ -78,7 +78,7 @@ fn run(init: std.process.Init) !void {
     var has_findings = false;
     const rules_cache = try loadRulesCache(io, arena_alloc, init.environ_map);
     if (rules_cache == null) {
-        try stderr.interface.writeAll("shg: no compiled rules found; run shg-config compile\n");
+        try stderr.interface.writeAll("shg: no compiled rules found; run shg-config init\n");
         try stderr.flush();
         std.process.exit(2);
     }

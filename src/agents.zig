@@ -53,7 +53,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     defer stderr.flush() catch {};
 
     const cache = (try loadRules(io, alloc, environ)) orelse {
-        try stderr.interface.writeAll("shg: no compiled rules found; run shg-config compile\n");
+        try stderr.interface.writeAll("shg: no compiled rules found; run shg-config init\n");
         try stderr.flush();
         std.process.exit(2);
     };

@@ -31,8 +31,40 @@ run_capture() {
 say "TEST missing compiled rules warning"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$fp"
 test "$status" -eq 2
-printf '%s\n' "$output" | grep -q 'shg: no compiled rules found; run shg-config compile'
+printf '%s\n' "$output" | grep -q 'shg: no compiled rules found; run shg-config init'
 say "PASS missing compiled rules warning"
+
+say "TEST initialize config"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" init
+test "$status" -eq 0
+printf '%s\n' "$output" | grep -q "Optional: run 'shg-config discover'"
+printf '%s\n' "$output" | grep -q "Use 'shg-config status' to see the current rules"
+test -s "$xdg/shg/ignore.default.shg"
+test -s "$xdg/shg/match.default.shg"
+test -s "$xdg/shg/paths.default.shg"
+test -s "$xdg/shg/paths.deep.default.shg"
+test -s "$xdg/shg/rules.bin"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$fp"
+test "$status" -eq 0
+printf '%s\n' 'custom-default-content' > "$xdg/shg/match.default.shg"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" init
+test "$status" -eq 0
+grep -q 'custom-default-content' "$xdg/shg/match.default.shg"
+say "PASS initialize config"
+
+say "TEST initialize config with system defaults"
+system_prefix=$tmp/homebrew
+system_xdg=$tmp/system-xdg
+mkdir -p "$system_prefix/share/shg/defaults" "$system_xdg"
+cp src/defaults/*.shg "$system_prefix/share/shg/defaults/"
+run_capture env HOMEBREW_PREFIX="$system_prefix" XDG_CONFIG_HOME="$system_xdg" "$shg_config" init
+test "$status" -eq 0
+test -s "$system_xdg/shg/rules.bin"
+test ! -e "$system_xdg/shg/ignore.default.shg"
+test ! -e "$system_xdg/shg/match.default.shg"
+test ! -e "$system_xdg/shg/paths.default.shg"
+test ! -e "$system_xdg/shg/paths.deep.default.shg"
+say "PASS initialize config with system defaults"
 
 say "TEST write default config files"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg_config" defaults -y
