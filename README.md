@@ -244,7 +244,8 @@ Options:
       --json            Output findings as NDJSON
 ```
 
-AI coding agents (Claude Code, Codex) keep full session transcripts on disk.
+AI coding agents such as Claude Code, Codex, Gemini CLI, and Copilot CLI keep
+full session transcripts on disk.
 Those transcripts are a **secret-concentration point**: as the agent reads
 `.env` files, runs `env`, and prints connection strings, every tool result is
 stored verbatim. A single transcript can end up holding secrets from many
@@ -276,16 +277,29 @@ and your own `match` patterns) fire. Pass `--thorough` to run every detector
 (much noisier on code). `--all-content` and `--thorough` are independent:
 one widens *what text* is scanned, the other *which detectors* count.
 
-Malformed JSONL records are reported as warnings and make the command exit with
-code 2. Other valid records are still scanned, but the result is not presented
-as a complete clean scan.
+Malformed JSON documents or JSONL records are reported as warnings and make the
+command exit with code 2. Other valid records are still scanned, but the result
+is not presented as a complete clean scan.
 
-With no `--path`, `shg deep` scans the locations listed in `paths.deep.*.shg`
-(by default `~/.claude/projects` and `~/.codex/sessions`). It never crawls the
-disk. It parses `*.jsonl` as structured transcripts and scans `.md`, `.txt`, and
-other file types as line-based plain text. This includes Claude memory and
-detached tool-result files. See [Configuration](#configuration) for the
-deep-scoped `ignore.deep.shg`, `match.deep.shg`, and `paths.deep.shg` files.
+With no `--path`, `shg deep` scans the locations listed in `paths.deep.*.shg`:
+
+| Agent | Default transcript path |
+|---|---|
+| Claude Code | `~/.claude/projects` |
+| Codex | `~/.codex/sessions` |
+| Gemini CLI | `~/.gemini/tmp` |
+| GitHub Copilot CLI | `~/.copilot/session-state` |
+
+It never crawls the disk. Claude, Codex, Gemini, and Copilot records get
+source-aware parsing. Other `*.json` and `*.jsonl` files are parsed
+structurally and all string values are scanned; `.md`, `.txt`, and unknown
+file types fall back to line-based text. This includes agent memory and
+detached tool-result files.
+
+OpenCode's current session store is SQLite and is not scanned yet. Aider's
+`.aider.chat.history.md` is project-local, so add the relevant files or parent
+directories to `paths.deep.local.shg`. See [Configuration](#configuration) for
+the deep-scoped `ignore.deep.shg`, `match.deep.shg`, and `paths.deep.shg` files.
 
 On an interactive terminal, `deep` shows one progress line per configured or
 explicit path, including the file currently being scanned. Completed lines

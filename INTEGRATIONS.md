@@ -138,7 +138,8 @@ curl http://internal/api?token=xyz # SHGNOK  ← don't save, no need to scan
 
 ## Scanning AI agent transcripts
 
-AI coding agents (Claude Code, Codex) store full session transcripts on disk.
+AI coding agents (Claude Code, Codex, Gemini CLI, and Copilot CLI) store full
+session transcripts on disk.
 As an agent reads `.env` files, runs `env`, and prints connection strings,
 those secrets are copied verbatim into the transcript — a file that usually
 has none of the protections of the files the secrets came from. `shg deep`
@@ -157,10 +158,17 @@ With no `--path`, it scans the locations in `paths.deep.*.shg`. The shipped
 ```
 ~/.claude/projects
 ~/.codex/sessions
+~/.gemini/tmp
+~/.copilot/session-state
 ```
 
 Codex's flat command history (`~/.codex/history.jsonl`) is *typed prompts*, so
 it is scanned by `shg history`/`shg scan`, not `deep`.
+
+Gemini CLI and GitHub Copilot CLI sessions are parsed from their JSON/JSONL
+records. OpenCode's current session store is SQLite and is not scanned yet.
+Aider chat histories are project-local (`.aider.chat.history.md`), so add the
+ones you need to `paths.deep.local.shg`.
 
 Add your own locations in `paths.deep.local.shg` (one path per line; `~/`
 expands to home; directories are walked recursively), then run

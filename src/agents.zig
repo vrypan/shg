@@ -5,6 +5,7 @@ const config = @import("config.zig");
 const rules = @import("rules.zig");
 const sources = @import("sources.zig");
 const detect = @import("detect.zig");
+const hints = @import("hints.zig");
 const redact = @import("redact.zig");
 const scorer = @import("scorer.zig");
 const formats = @import("agent_formats.zig");
@@ -37,6 +38,7 @@ const ScanOutcome = struct {
 const MalformedWarning = struct {
     path: []const u8,
     count: usize,
+    unit: []const u8,
 };
 
 pub fn run(init: std.process.Init, args: cli.Args) !void {
@@ -79,7 +81,11 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
         try progress.finishFile(item.root_index, flag_count);
         if (outcome.malformed > 0) {
             malformed_total += outcome.malformed;
-            try malformed_warnings.append(alloc, .{ .path = item.path, .count = outcome.malformed });
+            try malformed_warnings.append(alloc, .{
+                .path = item.path,
+                .count = outcome.malformed,
+                .unit = formats.malformedUnit(formats.formatForPath(item.path)),
+            });
         }
         if (outcome.result) |res| {
             try results.append(alloc, res);
@@ -89,7 +95,7 @@ pub fn run(init: std.process.Init, args: cli.Args) !void {
     try progress.complete();
 
     for (malformed_warnings.items) |warning| {
-        try stderr.interface.print("shg: warning: {s}: skipped {d} malformed JSONL record(s)\n", .{ warning.path, warning.count });
+        try stderr.interface.print("shg: warning: {s}: skipped {d} malformed {s}\n", .{ warning.path, warning.count, warning.unit });
     }
     try stderr.flush();
 
@@ -283,16 +289,18 @@ fn scanFile(io: Io, alloc: std.mem.Allocator, path: []const u8, args: cli.Args, 
         for (findings) |f| {
             if (f.severity == .ignore) continue;
             if (@intFromEnum(f.severity) < @intFromEnum(args.level)) continue;
-            // Strict by default: transcripts are a haystack of code, so only
-            // the format-specific / user-defined detectors fire unless
-            // --thorough. The loose detectors (inline_assign, auth_header, …)
-            // are the source of code false positives here.
-            if (!args.thorough and !isHighConfidence(f.det_type)) continue;
 
             const key: []const u8 = if (f.full_match_len > 0)
                 piece.text[f.full_match_start..][0..f.full_match_len]
             else
                 f.redacted_cmd;
+
+            // Strict by default: transcripts are a haystack of code, so only
+            // format-specific / user-defined detectors fire unless
+            // --thorough. A known provider prefix remains high-confidence even
+            // when a more specific detector labels it inline_assign or
+            // auth_header.
+            if (!args.thorough and !isHighConfidence(f.det_type) and !hints.hasKnownPrefix(key)) continue;
 
             const gop = try map.getOrPut(key);
             if (!gop.found_existing) {

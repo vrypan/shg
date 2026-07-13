@@ -43,6 +43,8 @@ test -s "$xdg/shg/ignore.default.shg"
 test -s "$xdg/shg/match.default.shg"
 test -s "$xdg/shg/paths.default.shg"
 test -s "$xdg/shg/paths.deep.default.shg"
+grep -q '~/.gemini/tmp' "$xdg/shg/paths.deep.default.shg"
+grep -q '~/.copilot/session-state' "$xdg/shg/paths.deep.default.shg"
 test -s "$xdg/shg/rules.bin"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" scan --env false --path "$fp"
 test "$status" -eq 0
@@ -309,6 +311,47 @@ if printf '%s\n' "$output" | grep -q "$agent_tok"; then
     exit 1
 fi
 say "PASS shg deep scans transcripts (per session)"
+
+say "TEST shg deep scans configured Gemini and Copilot sessions"
+agent_home=$tmp/agent-home
+gemini_dir=$agent_home/.gemini/tmp/project/chats
+copilot_dir=$agent_home/.copilot/session-state/session-id
+mkdir -p "$gemini_dir" "$copilot_dir"
+gemini_tok=ghp_GEMI7kP9mQ2vR5xT8nL3cS6aB1dF4hJ0
+copilot_tok=sk-COPI4nV8qR2mK7xC5pT9zL3w
+printf '%s\n' \
+    '{"sessionId":"gemini-session","projectHash":"project"}' \
+    '{"type":"user","content":"check the environment"}' \
+    "{\"type\":\"gemini\",\"content\":\"done\",\"toolCalls\":[{\"args\":{\"command\":\"env\"},\"result\":[{\"text\":\"GITHUB_TOKEN=$gemini_tok\"}]}]}" \
+    > "$gemini_dir/session-demo.jsonl"
+printf '%s\n' \
+    '{"type":"user.message","data":{"content":"inspect the deployment"}}' \
+    "{\"type\":\"tool.execution_complete\",\"data\":{\"output\":\"API_KEY=$copilot_tok\"}}" \
+    > "$copilot_dir/events.jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" HOME="$agent_home" "$shg" deep
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$gemini_dir/session-demo.jsonl"
+printf '%s\n' "$output" | grep -q "$copilot_dir/events.jsonl"
+test "$(printf '%s\n' "$output" | grep -c 'tool_output')" -eq 2
+if printf '%s\n' "$output" | grep -q "$gemini_tok\|$copilot_tok"; then
+    printf '%s\n' "deep output leaked a Gemini or Copilot fixture token" >&2
+    exit 1
+fi
+say "PASS shg deep scans configured Gemini and Copilot sessions"
+
+say "TEST shg deep uses generic JSONL fallback"
+generic_jsonl=$tmp/generic-session.jsonl
+generic_tok=ghp_GENR7kP9mQ2vR5xT8nL3cS6aB1dF4hJ0
+printf '%s\n' "{\"event\":{\"payload\":\"token=$generic_tok\"}}" > "$generic_jsonl"
+run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$generic_jsonl"
+test "$status" -eq 1
+printf '%s\n' "$output" | grep -q "$generic_jsonl"
+printf '%s\n' "$output" | grep -q 'stored_context'
+if printf '%s\n' "$output" | grep -q "$generic_tok"; then
+    printf '%s\n' "generic JSONL output leaked the fixture token" >&2
+    exit 1
+fi
+say "PASS shg deep uses generic JSONL fallback"
 
 say "TEST shg deep reports malformed transcript records"
 broken=$tmp/broken-transcript.jsonl

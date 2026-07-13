@@ -1,6 +1,8 @@
-# shg agent transcript paths — scanned by `shg agents`.
+# shg agent transcript paths — scanned by `shg deep`.
 # One path per line; ~/ expands to home; directories are walked recursively.
 # Prefix a path with ! to exclude that path and its descendants.
 # The transcript format is detected from the path.
 ~/.claude/projects
 ~/.codex/sessions
+~/.gemini/tmp
+~/.copilot/session-state

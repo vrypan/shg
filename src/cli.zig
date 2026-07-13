@@ -51,7 +51,7 @@ const deep_spec = zecli.CommandSpec{
         \\
         \\Strict by default (high-confidence detectors only); use --thorough to
         \\run every detector. With no --path, scans the locations in
-        \\paths.deep.*.shg (~/.claude/projects, ~/.codex/sessions by default).
+        \\paths.deep.*.shg (Claude, Codex, Gemini, and Copilot CLI by default).
         \\
     ,
 };

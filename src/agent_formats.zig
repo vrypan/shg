@@ -29,19 +29,50 @@ pub const Piece = struct {
     text: []const u8,
 };
 
-pub const Format = enum { claude, claude_history, codex_history, codex_session, markdown, text };
+pub const Format = enum {
+    claude,
+    claude_history,
+    codex_history,
+    codex_session,
+    gemini_json,
+    gemini_jsonl,
+    copilot,
+    json,
+    jsonl,
+    markdown,
+    text,
+};
 
-/// Pick a parser from the file path. Unknown `.jsonl` defaults to Claude (the
-/// most permissive structured extractor); every other file is plain text.
+/// Pick a parser from the file path. Known agents get source-aware extraction;
+/// unknown JSON/JSONL recursively scans string values; everything else is text.
 pub fn formatForPath(path: []const u8) Format {
     if (std.mem.endsWith(u8, path, ".jsonl")) {
-        if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null) return .codex_history;
-        if (std.mem.indexOf(u8, path, "/.codex/sessions/") != null) return .codex_session;
-        if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null) return .claude_history;
-        return .claude;
+        if (pathContains(path, "/.codex/history.jsonl", "\\.codex\\history.jsonl")) return .codex_history;
+        if (pathContains(path, "/.codex/sessions/", "\\.codex\\sessions\\")) return .codex_session;
+        if (pathContains(path, "/.claude/history.jsonl", "\\.claude\\history.jsonl")) return .claude_history;
+        if (pathContains(path, "/.claude/projects/", "\\.claude\\projects\\")) return .claude;
+        if (pathContains(path, "/.gemini/tmp/", "\\.gemini\\tmp\\")) return .gemini_jsonl;
+        if (pathContains(path, "/.copilot/session-state/", "\\.copilot\\session-state\\")) return .copilot;
+        return .jsonl;
+    }
+    if (std.mem.endsWith(u8, path, ".json")) {
+        if (pathContains(path, "/.gemini/tmp/", "\\.gemini\\tmp\\")) return .gemini_json;
+        return .json;
     }
     if (std.mem.endsWith(u8, path, ".md") or std.mem.endsWith(u8, path, ".markdown")) return .markdown;
     return .text;
+}
+
+fn pathContains(path: []const u8, unix: []const u8, windows: []const u8) bool {
+    return std.mem.indexOf(u8, path, unix) != null or std.mem.indexOf(u8, path, windows) != null;
+}
+
+pub fn malformedUnit(format: Format) []const u8 {
+    return switch (format) {
+        .json, .gemini_json => "JSON document(s)",
+        .claude, .claude_history, .codex_history, .codex_session, .gemini_jsonl, .copilot, .jsonl => "JSONL record(s)",
+        .markdown, .text => "record(s)",
+    };
 }
 
 /// Parse one transcript file's bytes into tagged text pieces. Best-effort: a
@@ -54,15 +85,31 @@ pub fn extract(format: Format, bytes: []const u8, alloc: std.mem.Allocator) ![]P
 
 pub fn extractCounting(format: Format, bytes: []const u8, alloc: std.mem.Allocator, skipped: *usize) ![]Piece {
     var pieces: std.ArrayList(Piece) = .empty;
+
+    if (format == .text or format == .markdown) {
+        try extractTextLines(bytes, alloc, &pieces);
+        return pieces.toOwnedSlice(alloc);
+    }
+
+    if (format == .json or format == .gemini_json) {
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch {
+            skipped.* += 1;
+            return pieces.toOwnedSlice(alloc);
+        };
+        defer parsed.deinit();
+        if (format == .gemini_json) {
+            try extractGeminiDocument(parsed.value, 1, alloc, &pieces);
+        } else {
+            try emitStringLeaves(&pieces, alloc, .stored_context, 1, parsed.value);
+        }
+        return pieces.toOwnedSlice(alloc);
+    }
+
     var line_no: usize = 0;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |line| {
         line_no += 1;
         if (line.len == 0) continue;
-        if (format == .text or format == .markdown) {
-            try emit(&pieces, alloc, .stored_context, line_no, std.mem.trimEnd(u8, line, "\r"));
-            continue;
-        }
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch {
             skipped.* += 1;
             continue;
@@ -73,10 +120,23 @@ pub fn extractCounting(format: Format, bytes: []const u8, alloc: std.mem.Allocat
             .claude_history => try extractClaudeHistory(parsed.value, line_no, alloc, &pieces),
             .codex_history => try extractCodexHistory(parsed.value, line_no, alloc, &pieces),
             .codex_session => try extractCodexSession(parsed.value, line_no, alloc, &pieces),
-            .markdown, .text => unreachable,
+            .gemini_jsonl => try extractGeminiRecord(parsed.value, line_no, alloc, &pieces),
+            .copilot => try extractCopilotEvent(parsed.value, line_no, alloc, &pieces),
+            .jsonl => try emitStringLeaves(&pieces, alloc, .stored_context, line_no, parsed.value),
+            .gemini_json, .json, .markdown, .text => unreachable,
         }
     }
     return pieces.toOwnedSlice(alloc);
+}
+
+fn extractTextLines(bytes: []const u8, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
+    var line_no: usize = 0;
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    while (it.next()) |line| {
+        line_no += 1;
+        if (line.len == 0) continue;
+        try emit(pieces, alloc, .stored_context, line_no, std.mem.trimEnd(u8, line, "\r"));
+    }
 }
 
 fn extractClaude(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
@@ -152,6 +212,90 @@ fn extractCodexSession(root: std.json.Value, line: usize, alloc: std.mem.Allocat
     }
 }
 
+// Gemini CLI's current session format is JSONL: one metadata record followed
+// by message records. Older releases wrote the same conversation as one JSON
+// document with a `messages` array, so both feed the same record extractor.
+fn extractGeminiDocument(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
+    const obj = asObject(root) orelse {
+        try emitStringLeaves(pieces, alloc, .stored_context, line, root);
+        return;
+    };
+    if (obj.get("messages")) |messages| {
+        const arr = asArray(messages) orelse return;
+        for (arr.items) |message| try extractGeminiRecord(message, line, alloc, pieces);
+        if (obj.get("summary")) |summary| try emitStringLeaves(pieces, alloc, .assistant, line, summary);
+        if (obj.get("memoryScratchpad")) |memory| try emitStringLeaves(pieces, alloc, .stored_context, line, memory);
+    } else {
+        try emitStringLeaves(pieces, alloc, .stored_context, line, root);
+    }
+}
+
+fn extractGeminiRecord(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
+    const obj = asObject(root) orelse return;
+    const rtype = objStr(obj, "type") orelse {
+        if (obj.get("$set")) |update| try emitStringLeaves(pieces, alloc, .stored_context, line, update);
+        if (obj.get("summary")) |summary| try emitStringLeaves(pieces, alloc, .assistant, line, summary);
+        if (obj.get("memoryScratchpad")) |memory| try emitStringLeaves(pieces, alloc, .stored_context, line, memory);
+        return;
+    };
+    const source: Source = if (std.mem.eql(u8, rtype, "user"))
+        .user_input
+    else if (std.mem.eql(u8, rtype, "gemini"))
+        .assistant
+    else
+        .stored_context;
+
+    if (obj.get("content")) |content| try emitStringLeaves(pieces, alloc, source, line, content);
+    if (source == .user_input) {
+        if (obj.get("displayContent")) |content| try emitStringLeaves(pieces, alloc, .user_input, line, content);
+    }
+    if (source != .assistant) return;
+
+    if (obj.get("toolCalls")) |calls| {
+        if (asArray(calls)) |arr| {
+            for (arr.items) |call| {
+                const call_obj = asObject(call) orelse continue;
+                if (call_obj.get("args")) |args| try emitStringLeaves(pieces, alloc, .tool_call, line, args);
+                if (call_obj.get("result")) |result| try emitStringLeaves(pieces, alloc, .tool_output, line, result);
+                if (call_obj.get("resultDisplay")) |result| try emitStringLeaves(pieces, alloc, .tool_output, line, result);
+            }
+        }
+    }
+    if (obj.get("thoughts")) |thoughts| try emitStringLeaves(pieces, alloc, .reasoning, line, thoughts);
+}
+
+// Copilot CLI stores an append-only stream of {type,data,...} events. Event
+// names are stable source hints even as individual data payloads evolve.
+fn extractCopilotEvent(root: std.json.Value, line: usize, alloc: std.mem.Allocator, pieces: *std.ArrayList(Piece)) !void {
+    const obj = asObject(root) orelse {
+        try emitStringLeaves(pieces, alloc, .stored_context, line, root);
+        return;
+    };
+    const rtype = objStr(obj, "type") orelse {
+        try emitStringLeaves(pieces, alloc, .stored_context, line, root);
+        return;
+    };
+    const source: Source = if (std.mem.startsWith(u8, rtype, "user.") or std.mem.startsWith(u8, rtype, "prompt."))
+        .user_input
+    else if (std.mem.indexOf(u8, rtype, "reason") != null)
+        .reasoning
+    else if (std.mem.startsWith(u8, rtype, "assistant."))
+        .assistant
+    else if (std.mem.startsWith(u8, rtype, "tool.") and
+        (std.mem.indexOf(u8, rtype, "start") != null or std.mem.indexOf(u8, rtype, "request") != null))
+        .tool_call
+    else if (std.mem.startsWith(u8, rtype, "tool."))
+        .tool_output
+    else
+        .stored_context;
+
+    if (obj.get("data")) |data| {
+        try emitStringLeaves(pieces, alloc, source, line, data);
+    } else {
+        try emitStringLeaves(pieces, alloc, source, line, root);
+    }
+}
+
 // A block's text is either a plain string or a list of {type,text} blocks.
 fn emitBlockText(pieces: *std.ArrayList(Piece), alloc: std.mem.Allocator, src: Source, line: usize, v: std.json.Value) !void {
     switch (v) {
@@ -214,11 +358,39 @@ test "formatForPath" {
     try std.testing.expectEqual(Format.codex_history, formatForPath("/home/u/.codex/history.jsonl"));
     try std.testing.expectEqual(Format.codex_session, formatForPath("/home/u/.codex/sessions/2026/01/x.jsonl"));
     try std.testing.expectEqual(Format.claude, formatForPath("/home/u/.claude/projects/p/x.jsonl"));
-    try std.testing.expectEqual(Format.claude, formatForPath("/tmp/whatever.jsonl"));
+    try std.testing.expectEqual(Format.gemini_jsonl, formatForPath("/home/u/.gemini/tmp/p/chats/session.jsonl"));
+    try std.testing.expectEqual(Format.gemini_json, formatForPath("/home/u/.gemini/tmp/p/checkpoint.json"));
+    try std.testing.expectEqual(Format.copilot, formatForPath("/home/u/.copilot/session-state/id/events.jsonl"));
+    try std.testing.expectEqual(Format.jsonl, formatForPath("/tmp/whatever.jsonl"));
+    try std.testing.expectEqual(Format.json, formatForPath("/tmp/whatever.json"));
     try std.testing.expectEqual(Format.markdown, formatForPath("/home/u/.claude/projects/p/memory/MEMORY.md"));
     try std.testing.expectEqual(Format.markdown, formatForPath("/tmp/notes.markdown"));
     try std.testing.expectEqual(Format.text, formatForPath("/home/u/.claude/projects/p/tool-results/result.txt"));
     try std.testing.expectEqual(Format.text, formatForPath("/tmp/unknown.data"));
+}
+
+test "generic JSON recursively emits string values" {
+    const alloc = std.testing.allocator;
+    const pieces = try extract(.json, "{\"token\":\"ghp_nested\",\"items\":[{\"value\":\"tool output\"}],\"count\":2}", alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 2), pieces.len);
+    try std.testing.expectEqualStrings("ghp_nested", pieces[0].text);
+    try std.testing.expectEqualStrings("tool output", pieces[1].text);
+    try std.testing.expectEqual(Source.stored_context, pieces[0].source);
+}
+
+test "generic JSONL recursively emits each record's string values" {
+    const alloc = std.testing.allocator;
+    const bytes =
+        "{\"data\":{\"prompt\":\"first\"}}\n" ++
+        "{\"data\":{\"result\":\"second\"}}\n";
+    const pieces = try extract(.jsonl, bytes, alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 2), pieces.len);
+    try std.testing.expectEqualStrings("first", pieces[0].text);
+    try std.testing.expectEqual(@as(usize, 1), pieces[0].line);
+    try std.testing.expectEqualStrings("second", pieces[1].text);
+    try std.testing.expectEqual(@as(usize, 2), pieces[1].line);
 }
 
 test "text: emits non-empty lines as stored context" {
@@ -312,6 +484,51 @@ test "codex session: function_call_output is tool_output, user message is user_i
     try std.testing.expectEqualStrings("AWS_SECRET=abc", pieces[0].text);
     try std.testing.expectEqual(Source.user_input, pieces[1].source);
     try std.testing.expectEqualStrings("fix the bug", pieces[1].text);
+}
+
+test "gemini JSONL classifies messages, tools, and reasoning" {
+    const alloc = std.testing.allocator;
+    const bytes =
+        "{\"sessionId\":\"s\",\"projectHash\":\"p\"}\n" ++
+        "{\"type\":\"user\",\"content\":\"deploy this\"}\n" ++
+        "{\"type\":\"gemini\",\"content\":\"assistant reply\",\"toolCalls\":[{\"args\":{\"command\":\"cat .env\"},\"result\":[{\"text\":\"GITHUB_TOKEN=ghp_x\"}]}],\"thoughts\":[{\"description\":\"reasoning text\"}]}\n";
+    const pieces = try extract(.gemini_jsonl, bytes, alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 5), pieces.len);
+    try std.testing.expectEqual(Source.user_input, pieces[0].source);
+    try std.testing.expectEqualStrings("deploy this", pieces[0].text);
+    try std.testing.expectEqual(Source.assistant, pieces[1].source);
+    try std.testing.expectEqual(Source.tool_call, pieces[2].source);
+    try std.testing.expectEqualStrings("cat .env", pieces[2].text);
+    try std.testing.expectEqual(Source.tool_output, pieces[3].source);
+    try std.testing.expectEqualStrings("GITHUB_TOKEN=ghp_x", pieces[3].text);
+    try std.testing.expectEqual(Source.reasoning, pieces[4].source);
+}
+
+test "legacy Gemini JSON document extracts its messages" {
+    const alloc = std.testing.allocator;
+    const bytes = "{\"sessionId\":\"s\",\"messages\":[{\"type\":\"user\",\"content\":\"hello\"},{\"type\":\"gemini\",\"content\":\"answer\"}]}";
+    const pieces = try extract(.gemini_json, bytes, alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 2), pieces.len);
+    try std.testing.expectEqual(Source.user_input, pieces[0].source);
+    try std.testing.expectEqual(Source.assistant, pieces[1].source);
+}
+
+test "Copilot events classify user, assistant, and tool data" {
+    const alloc = std.testing.allocator;
+    const bytes =
+        "{\"type\":\"user.message\",\"data\":{\"content\":\"check this\"}}\n" ++
+        "{\"type\":\"assistant.message\",\"data\":{\"content\":\"response\"}}\n" ++
+        "{\"type\":\"tool.execution_start\",\"data\":{\"command\":\"env\"}}\n" ++
+        "{\"type\":\"tool.execution_complete\",\"data\":{\"output\":\"API_KEY=secret\"}}\n";
+    const pieces = try extract(.copilot, bytes, alloc);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 4), pieces.len);
+    try std.testing.expectEqual(Source.user_input, pieces[0].source);
+    try std.testing.expectEqual(Source.assistant, pieces[1].source);
+    try std.testing.expectEqual(Source.tool_call, pieces[2].source);
+    try std.testing.expectEqual(Source.tool_output, pieces[3].source);
 }
 
 test "malformed line is skipped, not crashed on" {

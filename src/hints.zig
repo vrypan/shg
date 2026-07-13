@@ -25,6 +25,14 @@ pub fn prefixIter() PrefixIter {
     return .{ .lines = std.mem.splitScalar(u8, hints_text, '\n') };
 }
 
+pub fn hasKnownPrefix(token: []const u8) bool {
+    var it = prefixIter();
+    while (it.next()) |prefix| {
+        if (std.mem.startsWith(u8, token, prefix)) return true;
+    }
+    return false;
+}
+
 /// Return the best rotation hint for a finding.
 /// Token-prefix rules take priority over det_type rules; among prefix rules the
 /// longest matching prefix wins (so "sk-ant-" beats "sk-").
@@ -62,6 +70,12 @@ pub fn lookup(det_type: []const u8, token: []const u8) []const u8 {
 test "prefix match beats det_type" {
     const h = lookup("inline_assign", "ghp_abcdefghijklmnopqrstuvwxyz012345");
     try std.testing.expect(std.mem.indexOf(u8, h, "github.com") != null);
+}
+
+test "known prefixes are shared with detection" {
+    try std.testing.expect(hasKnownPrefix("ghp_abcdefghijklmnopqrstuvwxyz012345"));
+    try std.testing.expect(hasKnownPrefix("sk-ant-api03-abcdef"));
+    try std.testing.expect(!hasKnownPrefix("ordinary-value"));
 }
 
 test "longer prefix wins" {
