@@ -262,8 +262,10 @@ as a complete clean scan.
 
 With no `--path`, `shg deep` scans the locations listed in `paths.deep.*.shg`
 (by default `~/.claude/projects` and `~/.codex/sessions`). It never crawls the
-disk. See [Configuration](#configuration) for the deep-scoped `ignore.deep.shg`,
-`match.deep.shg`, and `paths.deep.shg` files.
+disk. It parses `*.jsonl` as structured transcripts and scans `.md`, `.txt`, and
+other file types as line-based plain text. This includes Claude memory and
+detached tool-result files. See [Configuration](#configuration) for the
+deep-scoped `ignore.deep.shg`, `match.deep.shg`, and `paths.deep.shg` files.
 
 Remediation differs from history: you can't cleanly edit one line of a
 transcript, so the advice is to rotate the credential and delete the session

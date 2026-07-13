@@ -227,12 +227,21 @@ mkdir -p "$adir"
 agent_tok=ghp_abcdefghijklmnopqrstuvwxyz012345
 printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"env dump $agent_tok\"}]}}" > "$adir/s.jsonl"
 printf '%s\n' "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"content\":\"again $agent_tok\"}]}}" >> "$adir/s.jsonl"
+mkdir -p "$adir/memory" "$adir/tool-results"
+printf '%s\n' '# Project memory' '-----BEGIN PRIVATE KEY-----' > "$adir/memory/MEMORY.md"
+printf '%s\n' 'plain tool output is not JSONL' > "$adir/tool-results/result.txt"
 run_capture env XDG_CONFIG_HOME="$xdg" "$shg" deep --path "$adir"
 test "$status" -eq 1
 printf '%s\n' "$output" | grep -q "$adir/s.jsonl"
+printf '%s\n' "$output" | grep -q "$adir/memory/MEMORY.md"
 printf '%s\n' "$output" | grep -q 'known_token'
+printf '%s\n' "$output" | grep -q 'private_key'
 printf '%s\n' "$output" | grep -q '(2'
 printf '%s\n' "$output" | grep -q 'delete the affected session files'
+if printf '%s\n' "$output" | grep -q 'malformed JSONL'; then
+    printf '%s\n' "deep treated non-JSONL support files as transcripts" >&2
+    exit 1
+fi
 # distinct token reported once, not once per occurrence
 test "$(printf '%s\n' "$output" | grep -c 'known_token')" -eq 1
 if printf '%s\n' "$output" | grep -q "$agent_tok"; then

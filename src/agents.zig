@@ -169,7 +169,7 @@ fn higherSeverityFirst(_: void, a: Agg, b: Agg) bool {
 
 fn scanned(source: Source, all_content: bool) bool {
     return switch (source) {
-        .user_input, .tool_call, .tool_output => true,
+        .user_input, .tool_call, .tool_output, .stored_context => true,
         .assistant, .reasoning => all_content,
     };
 }
@@ -326,6 +326,7 @@ test "scanned honours the default and --all-content sets" {
     try std.testing.expect(scanned(.user_input, false));
     try std.testing.expect(scanned(.tool_output, false));
     try std.testing.expect(scanned(.tool_call, false));
+    try std.testing.expect(scanned(.stored_context, false));
     try std.testing.expect(!scanned(.assistant, false));
     try std.testing.expect(!scanned(.reasoning, false));
     try std.testing.expect(scanned(.assistant, true));

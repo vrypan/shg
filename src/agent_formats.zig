@@ -7,6 +7,7 @@ pub const Source = enum {
     user_input,
     tool_call,
     tool_output,
+    stored_context,
     assistant,
     reasoning,
 
@@ -15,6 +16,7 @@ pub const Source = enum {
             .user_input => "user_input",
             .tool_call => "tool_call",
             .tool_output => "tool_output",
+            .stored_context => "stored_context",
             .assistant => "assistant",
             .reasoning => "reasoning",
         };
@@ -27,15 +29,19 @@ pub const Piece = struct {
     text: []const u8,
 };
 
-pub const Format = enum { claude, claude_history, codex_history, codex_session };
+pub const Format = enum { claude, claude_history, codex_history, codex_session, markdown, text };
 
-/// Pick a transcript format from the file path. Unknown `.jsonl` defaults to
-/// Claude (the most permissive extractor).
+/// Pick a parser from the file path. Unknown `.jsonl` defaults to Claude (the
+/// most permissive structured extractor); every other file is plain text.
 pub fn formatForPath(path: []const u8) Format {
-    if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null) return .codex_history;
-    if (std.mem.indexOf(u8, path, "/.codex/sessions/") != null) return .codex_session;
-    if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null) return .claude_history;
-    return .claude;
+    if (std.mem.endsWith(u8, path, ".jsonl")) {
+        if (std.mem.indexOf(u8, path, "/.codex/history.jsonl") != null) return .codex_history;
+        if (std.mem.indexOf(u8, path, "/.codex/sessions/") != null) return .codex_session;
+        if (std.mem.indexOf(u8, path, "/.claude/history.jsonl") != null) return .claude_history;
+        return .claude;
+    }
+    if (std.mem.endsWith(u8, path, ".md") or std.mem.endsWith(u8, path, ".markdown")) return .markdown;
+    return .text;
 }
 
 /// Parse one transcript file's bytes into tagged text pieces. Best-effort: a
@@ -53,6 +59,10 @@ pub fn extractCounting(format: Format, bytes: []const u8, alloc: std.mem.Allocat
     while (it.next()) |line| {
         line_no += 1;
         if (line.len == 0) continue;
+        if (format == .text or format == .markdown) {
+            try emit(&pieces, alloc, .stored_context, line_no, std.mem.trimEnd(u8, line, "\r"));
+            continue;
+        }
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch {
             skipped.* += 1;
             continue;
@@ -63,6 +73,7 @@ pub fn extractCounting(format: Format, bytes: []const u8, alloc: std.mem.Allocat
             .claude_history => try extractClaudeHistory(parsed.value, line_no, alloc, &pieces),
             .codex_history => try extractCodexHistory(parsed.value, line_no, alloc, &pieces),
             .codex_session => try extractCodexSession(parsed.value, line_no, alloc, &pieces),
+            .markdown, .text => unreachable,
         }
     }
     return pieces.toOwnedSlice(alloc);
@@ -204,6 +215,23 @@ test "formatForPath" {
     try std.testing.expectEqual(Format.codex_session, formatForPath("/home/u/.codex/sessions/2026/01/x.jsonl"));
     try std.testing.expectEqual(Format.claude, formatForPath("/home/u/.claude/projects/p/x.jsonl"));
     try std.testing.expectEqual(Format.claude, formatForPath("/tmp/whatever.jsonl"));
+    try std.testing.expectEqual(Format.markdown, formatForPath("/home/u/.claude/projects/p/memory/MEMORY.md"));
+    try std.testing.expectEqual(Format.markdown, formatForPath("/tmp/notes.markdown"));
+    try std.testing.expectEqual(Format.text, formatForPath("/home/u/.claude/projects/p/tool-results/result.txt"));
+    try std.testing.expectEqual(Format.text, formatForPath("/tmp/unknown.data"));
+}
+
+test "text: emits non-empty lines as stored context" {
+    const alloc = std.testing.allocator;
+    var skipped: usize = 0;
+    const pieces = try extractCounting(.text, "first line\n\nsecond line\r\n", alloc, &skipped);
+    defer freePieces(alloc, pieces);
+    try std.testing.expectEqual(@as(usize, 2), pieces.len);
+    try std.testing.expectEqual(Source.stored_context, pieces[0].source);
+    try std.testing.expectEqualStrings("first line", pieces[0].text);
+    try std.testing.expectEqual(@as(usize, 3), pieces[1].line);
+    try std.testing.expectEqualStrings("second line", pieces[1].text);
+    try std.testing.expectEqual(@as(usize, 0), skipped);
 }
 
 test "claude: typed prompt is user_input" {
