@@ -166,7 +166,7 @@ fn run(init: std.process.Init) !void {
     } else if (!args.json and !args.one_line) {
         try report.printSummary(&stdout, counts);
         if (has_agent_history_findings) {
-            try stdout.interface.writeAll("\nWarning: secrets found in agent command history may also be stored in agent session or memory files. Run 'shg deep' to scan them.\n");
+            try report.printAgentHistoryWarning(&stdout, report_opts.color);
         }
     }
     try stdout.flush();

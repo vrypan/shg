@@ -202,8 +202,8 @@ scanned per line, like shell history. Full agent *transcripts* (tool output,
 etc.) are the concern of `deep`, not `history`.
 
 When a scan finds a secret in a recognized agent command-history file, the
-human-readable summary suggests running `shg deep`: the same secret may also
-have been retained in that agent's session or memory files.
+human-readable summary prints a warning suggesting `shg deep`: the same secret
+may also have been retained in that agent's session or memory files.
 
 ### fix
 

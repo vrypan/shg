@@ -143,6 +143,23 @@ pub fn printSummary(w: *Io.File.Writer, counts: [4]usize) !void {
     try w.interface.writeAll("Remove flagged history entries and rotate affected credentials.\n");
 }
 
+pub fn printAgentHistoryWarning(w: *Io.File.Writer, color: bool) !void {
+    try printAgentHistoryWarningWriter(&w.interface, color);
+}
+
+fn printAgentHistoryWarningWriter(w: anytype, color: bool) !void {
+    try w.writeByte('\n');
+    if (color) {
+        try w.print("{s}Warning:{s}", .{ ansi_bold_red, ansi_reset });
+    } else {
+        try w.writeAll("Warning:");
+    }
+    try w.writeAll(
+        " secrets found in agent command history may also be stored in agent\n" ++
+            "         session or memory files. Run 'shg deep' to scan them.\n",
+    );
+}
+
 test "colored report bolds full command" {
     var out: Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
@@ -150,6 +167,23 @@ test "colored report bolds full command" {
     const cmd = "export TOKEN=ghp...et";
     try printCommandWriter(&out.writer, cmd, 0, cmd.len, true);
     try std.testing.expectEqualStrings("\x1b[1mexport TOKEN=ghp...et\x1b[0m", out.written());
+}
+
+test "agent history warning colors only its label and wraps below 80 columns" {
+    var out: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+
+    try printAgentHistoryWarningWriter(&out.writer, true);
+    try std.testing.expectEqualStrings(
+        "\n\x1b[1;31mWarning:\x1b[0m secrets found in agent command history may also be stored in agent\n" ++
+            "         session or memory files. Run 'shg deep' to scan them.\n",
+        out.written(),
+    );
+
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(line.len <= 80 + ansi_bold_red.len + ansi_reset.len);
+    }
 }
 
 test "long command is windowed around the match" {
